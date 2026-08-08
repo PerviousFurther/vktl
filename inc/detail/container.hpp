@@ -35,17 +35,6 @@ VKTL_EXPORT_ namespace vktl::detail {
 			node* next = nullptr;
 		};
 
-		// template<typename T>
-		// struct node : node {
-		// 	T value;
-		// 
-		// 	template<typename... Args>
-		// 	constexpr explicit node(Args&&... args)
-		// 		: value(static_cast<Args&&>(args)...) {
-		// 		this->deleter = [](node const* ptr) noexcept { delete static_cast<node*>(ptr); };
-		// 	}
-		// };
-
 		using size_type = ::std::size_t;
 		using difference_type = ::std::ptrdiff_t;
 
@@ -195,8 +184,6 @@ VKTL_EXPORT_ namespace vktl::detail {
 		node root_;
 		size_type size_ = 0u;
 	};
-
-
 
 	// if defined VK_DEFINE_HANDLE to customize vulkan's handle, 
 	// you need to specialize this to enable customize vulkan handle.

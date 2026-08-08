@@ -15,7 +15,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 			if (handle_) {
 				N::init();
 				VK_ vkCreateSemaphore(
-					handle_from<N, device>(), &info,
+					handle_of<N, device>(), &info,
 					N::allocator(), &handle_) | popup{ "[SEMAPHORE] Create semaphore failure." };
 			}
 		}
@@ -23,7 +23,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 		void reset() noexcept {
 			if (handle_) {
 				VK_ vkDestroySemaphore(
-					handle_from<N, device>(), handle_,
+					handle_of<N, device>(), handle_,
 					N::allocator());
 			}
 		}

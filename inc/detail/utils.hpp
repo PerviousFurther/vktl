@@ -550,6 +550,16 @@ VKTL_EXPORT_ namespace vktl::detail {
 		}
 	};
 
-	template<typename N, typename T>
-	constexpr auto handle_from() noexcept { return N::template parent<T>()->handle(); }
+	template<typename T, typename N>
+	constexpr auto parent_of(N* pthis) 
+		noexcept { return pthis->template parent<T>(); }
+
+	template<typename T, typename N>
+	constexpr auto handle_of(N* pthis) 
+		noexcept { return parent_of<T>(pthis)->handle(); }
+
+	template<template<typename>typename...Tps>
+	using box_list = vector<box<Tps...>>;
+	template<typename...Ts>
+	using type_box_list = vector<type_box<Ts...>>;
 }

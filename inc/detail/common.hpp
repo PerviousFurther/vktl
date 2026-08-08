@@ -2,88 +2,204 @@
 
 VKTL_EXPORT_ namespace vktl::vptr {
 	using detail::box;
-	using detail::type_box;
 
-	template<typename C>
-	struct initable : C {
-		template<typename>
-		friend struct initable;
-	protected:
-		using base = C;
+	struct initable {
+		template<typename C>
+		struct apply : C {
+			template<typename>
+			friend struct apply;
 
-		template<typename T>
-		void rebind() {
-			base::template rebind<T>();
-			init_ = [](void* ptr) { static_cast<T*>(ptr_)->init(); };
-		}
+		protected:
+			using base = C;
 
-		template<typename T>
-		void rebind(initable<T> const& other) {
-			base::rebind(other);
-			init_ = other.init_;
-		}
+			template<typename T>
+			void rebind() {
+				base::template rebind<T>();
+				vptr_.init_ = [](void* ptr) { static_cast<T*>(ptr)->init(); };
+			}
 
-	public:
-		void init() { init_(C::get_this()); }
+			template<typename T>
+			void rebind(initable<T> const& other) {
+				base::rebind(other);
+				vptr_ = other.vptr_;
+			}
 
-	private:
+		public:
+			void init() { vptr_.init_(C::get_this()); }
+
+		private:
+			initable vptr_;
+		};
+
 		void(*init_)(void*);
 	};
 
-	template<typename C>
-	struct resetable : C {
-		template<typename>
-		friend struct resetable;
+	struct resetable {
+		template<typename C>
+		struct apply : C {
+			template<typename>
+			friend struct apply;
 
-	protected:
-		using base = C;
+		protected:
+			using base = C;
 
-		template<typename T>
-		void rebind() {
-			base::template rebind<T>();
-			reset_ = [](void* ptr) { static_cast<T*>(ptr)->reset(); };
-		}
+			template<typename T>
+			void rebind() {
+				base::template rebind<T>();
+				vptr_.reset_ = [](void* ptr) { static_cast<T*>(ptr)->reset(); };
+			}
 
-		template<typename T>
-		void rebind(resetable<T> const& other) {
-			base::rebind(other);
-			reset_ = other.reset_;
-		}
+			template<typename O>
+			void rebind(apply<O> const& other) {
+				base::rebind(other);
+				vptr_ = other.vptr_;
+			}
 
-	public:
-		void reset() {
-			if (reset_) { reset_(C::get_this()); }
-		}
+		public:
+			void reset() {
+				vptr_.reset_(C::get_this());
+			}
 
-	private:
+		private:
+			resetable vptr_;
+		};
+
 		void(*reset_)(void*) = nullptr;
 	};
 
 	template<typename C>
-	using reusable = resetable<initable<C>>;
+	using reusable = resetable::apply<initable::apply<C>>;
 
-	template<typename C, typename H>
-	struct handle_owner : C {
-		using handle_type = H;
+	template<typename Handle>
+	struct handle_owner {
+		template<typename C>
+		struct apply : C {
+			template<typename>
+			friend struct apply;
 
-	protected:
-		using base = C;
+			using handle_type = Handle;
 
-		template<typename T>
-		void rebind() {
-			C::template rebind<T>();
-			handle_ = [](const void* ptr) -> handle_type {
-				return static_cast<const T*>(ptr)->handle();
-			};
-		}
+		protected:
+			using base = C;
 
-	public:
-		handle_type handle() const {
-			return handle_(C::get_this());
-		}
+			template<typename T>
+			void rebind() {
+				base::template rebind<T>();
+				vptr_.handle_ = [](const void* ptr) -> handle_type {
+					return static_cast<const T*>(ptr)->handle();
+					};
+			}
 
-	private:
-		handle_type(*handle_)(void const*) = nullptr;
+			template<typename O>
+			void rebind(apply<O> const& other) {
+				base::rebind(other);
+				vptr_ = other.vptr_;
+			}
+
+		public:
+			handle_type handle() const {
+				return vptr_.handle_(C::get_this());
+			}
+
+		private:
+			handle_owner vptr_;
+		};
+
+		handle_type(*handle_)(const void*) = nullptr;
+	};
+
+	template<typename E>
+	struct element_of {
+		template<typename C>
+		struct apply : C {
+			template<typename>
+			friend struct apply;
+
+			using element_type = E;
+
+		protected:
+			using base = C;
+
+			template<typename T>
+			void rebind() {
+				base::template rebind<T>();
+				vptr_.remove_element_ = [](void* ptr, element_type* element) {
+					static_cast<T*>(ptr)->remove_from_handle(element);
+					};
+			}
+
+			template<typename O>
+			void rebind(apply<O> const& other) {
+				base::rebind(other);
+				vptr_ = other.vptr_;
+			}
+
+		public:
+			void remove(element_type* element) {
+				vptr_.remove_element_(C::get_this(), element);
+			}
+
+		private:
+			element_of vptr_;
+		};
+
+		void(*remove_element_)(void*, E*) = nullptr;
+	};
+
+	template<typename V = void>
+	struct unbind_notifier {
+		using notifier_type = ::std::conditional_t<::std::is_void_v<V>,
+			void(*)(void*),
+			void(*)(void*, V)>;
+
+		template<typename C>
+		struct apply : C {
+			template<typename>
+			friend struct apply;
+
+		protected:
+			using base = C;
+
+			template<typename T>
+			void rebind() {
+				base::template rebind<T>();
+				if constexpr (::std::is_void_v<V>) {
+					vptr_.notifier_ = [](void* ptr) {
+						static_cast<T*>(ptr)->on_unbind();
+						};
+				}
+				else {
+					vptr_.notifier_ = [](void* ptr, V value) {
+						static_cast<T*>(ptr)->on_unbind(::std::move(value));
+						};
+				}
+			}
+
+			template<typename O>
+			void rebind(apply<O> const& other) {
+				base::rebind(other);
+				vptr_ = other.vptr_;
+			}
+
+		public:
+			void unbind() {
+				if constexpr (::std::is_void_v<V>) {
+					vptr_.notifier_(C::get_this());
+				}
+				else {
+					vptr_.notifier_(C::get_this(), V());
+				}
+			}
+
+			void unbind(V value) requires(!::std::is_void_v<V>) {
+				vptr_.notifier_(C::get_this(), ::std::move(value));
+			}
+
+		private:
+			unbind_notifier vptr_;
+		};
+
+		notifier_type notifier_ = nullptr;
 	};
 }
 
@@ -249,7 +365,33 @@ VKTL_EXPORT_ namespace vktl::detail {
 	template<typename T>
 	constexpr auto is_lockable = object_of<T, lockable_>;
 
+	template<typename T>
+	struct locked : handle_<T> {
+		using base = handle_<T>;
 
+		locked(T value, lock_duck_& lock)
+			: base{ value }
+			, plock_{ nullptr }
+		{}
+
+		locked(T value, ::std::mutex& lock)
+			: base{value}
+			, plock_{&lock}
+		{ plock_->lock(); }
+
+		locked(T value, ::std::mutex* lock)
+			: base{value}
+			, plock_{lock}
+		{ if(plock_){ plock_->lock(); } }
+
+		locked(locked const&) = delete;
+		locked& operator=(locked const&) = delete;
+
+		~locked() { if (plock_) { plock_->unlock(); } }
+
+	private:
+		::std::mutex* plock_;
+	};
 
 	using namespace extensions;
 

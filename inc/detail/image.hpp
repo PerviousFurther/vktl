@@ -33,7 +33,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 			if (handle_) {
 				N::init();
 				VK_ vkCreateImage(
-					handle_from<N, device>(), &info,
+					handle_of<N, device>(), &info,
 					N::allocator(), &handle_) | popup{ "[IMAGE] Create image failure." };
 			}
 		}
@@ -41,7 +41,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 		void reset() noexcept {
 			if (handle_) {
 				VK_ vkDestroyImage(
-					handle_from<N, device>(), handle_,
+					handle_of<N, device>(), handle_,
 					N::allocator());
 			}
 		}
@@ -70,14 +70,14 @@ VKTL_EXPORT_ namespace vktl::detail {
 		void init() {
 			if (handle_) {
 				N::init();
-				VK_ vkCreateImageView(handle_from<N, device>(), &info, N::allocator(), &handle_)
+				VK_ vkCreateImageView(handle_of<N, device>(), &info, N::allocator(), &handle_)
 					| popup{ "[IMAGE_VIEW] Create image view failure." };
 			}
 		}
 
 		void reset() {
 			if (handle_) {
-				VK_ vkDestroyImageView(handle_from<N, device>(), handle_, N::allocator());
+				VK_ vkDestroyImageView(handle_of<N, device>(), handle_, N::allocator());
 			}
 		}
 

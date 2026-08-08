@@ -65,13 +65,13 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 		void init() {
 			if (!handle_) {
-				VK_ vkDestroyRenderPass(handle_from<N, device>(), handle_, N::allocator());
+				VK_ vkDestroyRenderPass(handle_of<N, device>(), handle_, N::allocator());
 			}
 		}
 
 		void reset() {
 			if (handle_) {
-				VK_ vkDestroyRenderPass(handle_from<N, device>(), handle_, N::allocator());
+				VK_ vkDestroyRenderPass(handle_of<N, device>(), handle_, N::allocator());
 			}
 		}
 

@@ -17,23 +17,20 @@ namespace VK_NAMESPACE {
 VKTL_EXPORT_ namespace vktl {
 	struct shader_handle_tag : detail::poly_list::node {
 		using base = detail::poly_list::node;
-		detail::box<detail::initable_vptr> parent;
+
 		VK_ VkShaderModule module = VK_NULL_HANDLE;
 
 		template<typename Self, typename Parent>
-		explicit shader_handle_tag(::std::in_place_type_t<Self> tag, Parent& parent_ref)
-			: base(tag), parent(parent_ref) {}
-
-		// template<typename Parent>
-		// explicit shader_handle_tag(Parent& parent_ref)
-		// 	: shader_handle_tag(::std::in_place_type<shader_handle_tag>, parent_ref) {
-		// }
+		explicit shader_handle_tag(::std::in_place_type_t<Self> tag)
+			: base(tag) 
+		{}
 	};
 }
 
 VKTL_EXPORT_ namespace vktl::detail {
-
 	struct default_shader : shader_handle_tag {
+		detail::box<vptr::initable> parent;
+
 		VK_ VkShaderStageFlagBits stage = VK_ VK_SHADER_STAGE_FLAG_BITS_MAX_ENUM;
 
 		vector<::std::byte> code;
@@ -49,12 +46,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 		template<typename Self, typename Parent>
 		explicit default_shader(::std::in_place_type_t<Self> tag, Parent& parent_ref, VK_ VkShaderStageFlagBits stage)
-			: shader_handle_tag(tag, parent_ref), stage(stage) {
-		}
-
-		template<typename Self, typename Parent>
-		default_shader(::std::in_place_type_t<Self> tag, Parent& parent_ref, VK_ VkShaderStageFlagBits stage, vector<::std::byte> raw_code, ::std::string entry = "main")
-			: shader_handle_tag(tag, parent_ref), stage(stage), code(::std::move(raw_code)), entry_point(::std::move(entry)) {
+			: shader_handle_tag(tag), stage(stage), parent(parent_ref) {
 		}
 
 		template<typename Parent>
@@ -88,11 +80,6 @@ VKTL_EXPORT_ namespace vktl::detail {
 			: default_shader(tag, parent_ref, VK_ VK_SHADER_STAGE_FRAGMENT_BIT) {
 		}
 
-		template<typename Self = default_fragment_shader, typename Parent>
-		default_fragment_shader(::std::in_place_type_t<Self> tag, Parent& parent_ref)
-			: default_shader(tag, parent_ref, VK_ VK_SHADER_STAGE_FRAGMENT_BIT) {
-		}
-
 		template<typename Parent>
 		explicit default_fragment_shader(Parent& parent_ref)
 			: default_fragment_shader(::std::in_place_type<default_fragment_shader>, parent_ref) {
@@ -108,20 +95,10 @@ VKTL_EXPORT_ namespace vktl::detail {
 		explicit default_compute_shader(::std::in_place_type_t<Self> tag, Parent& parent_ref)
 			: default_shader(tag, parent_ref, VK_ VK_SHADER_STAGE_COMPUTE_BIT) {
 		}
-
-		template<typename Self = default_compute_shader, typename Parent>
-		default_compute_shader(::std::in_place_type_t<Self> tag, Parent& parent_ref)
-			: default_shader(tag, parent_ref, VK_ VK_SHADER_STAGE_COMPUTE_BIT) {
-		}
-
 		template<typename Parent>
 		explicit default_compute_shader(Parent& parent_ref)
 			: default_compute_shader(::std::in_place_type<default_compute_shader>, parent_ref) {
 		}
-
-		template<typename Parent>
-		default_compute_shader(Parent& parent_ref)
-			: default_shader(::std::in_place_type<default_compute_shader>, parent_ref, VK_ VK_SHADER_STAGE_COMPUTE_BIT) {}
 	};
 
 	struct default_geometry_shader : default_shader {
@@ -248,6 +225,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 		}
 
 		void init(::std::invocable<default_shader&> auto&& func = &compile::duck_invoker_) {
+			::std::lock_guard _{ N::get_lock() };
 			for (default_shader& shader : shaders_) {
 				if (shader.compiled.empty()) {
 					compile_shader_(shader);
@@ -258,7 +236,8 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 				func(shader);
 
-				if (auto hdv = handle_from<N, device>()) {
+				// compiler allow device is not created.
+				if (auto hdv = handle_of<device>(this)) {
 					VK_ VkShaderModuleCreateInfo cinfo{
 						.sType = VK_ VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
 						.codeSize = shader.compiled.size() * sizeof(uint32_t), // 修复：字节大小必须乘以 sizeof(uint32_t)
@@ -329,6 +308,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 		}
 
 		default_shader& append_(VK_ VkShaderStageFlagBits stage) {
+			::std::lock_guard _{N::get_lock()};
 			switch (stage) {
 				switch (stage) {
 				case VK_SHADER_STAGE_VERTEX_BIT:
@@ -443,7 +423,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 			uint32_t set_count = 0;
 			VK_ spvReflectEnumerateDescriptorSets(&spv_module, &set_count, nullptr);
-			vector<SpvReflectDescriptorSet*> reflect_sets(set_count);
+			vector<VK_ SpvReflectDescriptorSet*> reflect_sets(set_count);
 			VK_ spvReflectEnumerateDescriptorSets(&spv_module, &set_count, reflect_sets.data());
 
 			shader.bindings.clear();
@@ -466,7 +446,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 			uint32_t pc_count = 0;
 			VK_ spvReflectEnumeratePushConstantBlocks(&spv_module, &pc_count, nullptr);
-			vector<SpvReflectBlockVariable*> pc_blocks(pc_count);
+			vector<VK_ SpvReflectBlockVariable*> pc_blocks(pc_count);
 			VK_ spvReflectEnumeratePushConstantBlocks(&spv_module, &pc_count, pc_blocks.data());
 
 			shader.push_constants.clear();
@@ -609,35 +589,62 @@ VKTL_EXPORT_ namespace vktl::detail {
 		constexpr m(optimize, auto&&...others)
 			: N{ forward_(others)... } {
 		}
-
-		void init(::std::invocable<default_shader&> auto&& fn = compile::duck_invoker_) {
-			N::init([&, this](default_shader& shader) {
-
+		template<::std::invocable<default_shader&>  Fn = call_duck_>
+		void init(Fn&& fn = call_duck) {
+			N::init([&](default_shader& shader) {
 				if (!shader.compiled.empty()) {
-					VK_ spv_target_env target_env = VK_ SPV_ENV_VULKAN_1_0;
-					VK_ spv_optimizer_t optimizer = VK_ spvOptimizerCreate(target_env);
-					if (optimizer) {
-						defer _{ [&]() { VK_ spvOptimizerDestroy(optimizer); } };
+					// vulkan 
+					auto minor = parent_of<instance>(this)->api_version_minor();
+					switch (minor) {
+					case 0:
+						target_env = VK_ SPV_ENV_VULKAN_1_0;
+						break;
+					case 1:
+						target_env = VK_ SPV_ENV_VULKAN_1_1;
+						break;
+					case 2:
+						target_env = VK_ SPV_ENV_VULKAN_1_2;
+						break;
+					case 3:
+						target_env = VK_ SPV_ENV_VULKAN_1_3;
+						break;
+					case 4:
+						target_env = VK_ SPV_ENV_VULKAN_1_4;
+						break;
+					default:assert(false);
+					}
+					auto* optimizer = VK_ spvOptimizerCreate(target_env);
+					VK_ spvOptimizerOptionsSetPreserveBindings(optimizer, params_.reserve_unused_bindings);
+					VK_ spvOptimizerOptionsSetPreserveSpecConstants(optimizer, params_.reserve_unused_spec_constants);
+					VK_ spvOptimizerOptionsSetRunValidator(optimizer, params_.validate);
+					if (!optimizer) { 
+						throw error{0x500, "[COMPILER] Create optmizer failure."}; 
+					}
+					if constexpr (::std::invocable<Fn&, VK_ spv_optimizer_t*>) {
+						fn(optimizer);
+					}
+					defer _{ [&]() { VK_ spvOptimizerDestroy(optimizer); } };
 
-						VK_ spvOptimizerRegisterPerformancePasses(optimizer);
-						VK_ spv_binary optimized_binary = nullptr;
-						VK_ spv_result_t result = VK_ spvOptimizerRun(
-							optimizer,
-							shader.compiled.data(),
-							shader.compiled.size(),
-							&optimized_binary,
-							nullptr
-						);
-						if (result == VK_ SPV_SUCCESS && optimized_binary) {
-							shader.compiled.assign(optimized_binary->code, optimized_binary->code + optimized_binary->word_count);
-							VK_ spvBinaryDestroy(optimized_binary);
-						}
+					VK_ spvOptimizerRegisterPerformancePasses(optimizer);
+					VK_ spv_binary optimized_binary = nullptr;
+					VK_ spv_result_t result = VK_ spvOptimizerRun(
+						optimizer,
+						shader.compiled.data(),
+						shader.compiled.size(),
+						&optimized_binary,
+						nullptr
+					);
+					if (result == VK_ SPV_SUCCESS && optimized_binary) {
+						shader.compiled.assign(optimized_binary->code, optimized_binary->code + optimized_binary->word_count);
+						VK_ spvBinaryDestroy(optimized_binary);
 					}
 				}
 
 				fn(shader);
 			});
 		}
+	private:
+		optimize params_;
 	};
 
 	// template<uint32_t Major, uint32_t Minor, typename N>

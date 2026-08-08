@@ -26,23 +26,34 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 	} invalid{}, maximum{};
 
-	template<template<typename>typename...Ts>
+	// template<template<typename>typename...Ts>
+	// struct compose {
+	// 	template<typename C>
+	// 	using apply = C;
+	// };
+	// template<template<typename>typename First>
+	// struct compose<First> {
+	// 	template<typename C>
+	// 	using apply = First<C>;
+	// };
+	// template<template<typename>typename First, template<typename>typename Second>
+	// struct compose<First, Second> {
+	// 	template<typename C>
+	// 	using apply = First<Second<C>>;
+	// };
+	// template<template<typename>typename First, template<typename>typename Second, template<typename>typename...Ts>
+	// struct compose<First, Second, Ts...> : compose<compose<First, Second>::template apply, Ts...> {};
+
+	template<typename...Ts>
 	struct compose {
 		template<typename C>
 		using apply = C;
 	};
-	template<template<typename>typename First>
-	struct compose<First> {
+	template<typename F, typename...Ts>
+	struct compose<F, Ts...> {
 		template<typename C>
-		using apply = First<C>;
+		using apply = typename compose<Ts...>::template apply<typename F::template apply<C>>;
 	};
-	template<template<typename>typename First, template<typename>typename Second>
-	struct compose<First, Second> {
-		template<typename C>
-		using apply = First<Second<C>>;
-	};
-	template<template<typename>typename First, template<typename>typename Second, template<typename>typename...Ts>
-	struct compose<First, Second, Ts...> : compose<compose<First, Second>::template apply, Ts...> {};
 
 	struct vptr_base {
 	protected:
@@ -55,7 +66,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 	};
 
 	// lefter template at topper of inheritance chain.
-	template<template<typename>typename...VPtrs>
+	template<typename...VPtrs>
 	struct box : compose<VPtrs...>::template apply<vptr_base> {
 		using base = compose<VPtrs...>::template apply<vptr_base>;
 
@@ -159,9 +170,6 @@ VKTL_EXPORT_ namespace vktl::detail {
 	};
 
 	// lefter type at topper of inheritance chain.
-	template<typename...Ts>
-	using type_box = box<Ts::template apply...>;
-
 	struct byte_view : span<const::std::byte> {
 		using base = span<const::std::byte>;
 
@@ -184,40 +192,50 @@ VKTL_EXPORT_ namespace vktl::detail {
 }
 
 VKTL_EXPORT_ namespace vktl::vptr {
-	template<typename C>
-	struct handle_allocator : C {
+	struct handle_allocator {
+		template<typename C>
+		struct apply : C {
+			template<typename>
+			friend struct apply;
 
-		void* allocate(size_t size, size_t alignment) {
-			assert(allocate_); return allocate_(C::get_this(), size, alignment);
-		}
-		void reallocable() {
-
-		}
-		void* reallocate(void* ptr, size_t size, size_t alignment = alignof(max_align_t)) {
-			assert(reallocate_); return reallocate_(C::get_this(), ptr, size, alignment);
-		}
-
-		void free(void* ptr) noexcept {
-			assert(free_); if (ptr) { free_(C::get_this(), ptr); }
-		}
-
-	protected:
-		template<typename T>
-		void rebind() noexcept {
-			allocate_ = [](void* ptr, size_t size, size_t alignment) -> void* {
-				return static_cast<T*>(ptr)->allocate(size, alignment);
-				};
-			if constexpr (requires(T & value, void* ptr, size_t size, size_t alignment)
-			{ { value.reallocate(ptr, size, alignment) } -> ::std::convertible_to<void*>;
-			}) {
-				reallocate_ = [](void* ptr, void* re, size_t size, size_t alignment) -> void* {
-					return static_cast<T*>(ptr)->reallocate(re, size, alignment);
-					};
+			void* allocate(size_t size, size_t alignment) {
+				assert(allocate_); return allocate_(C::get_this(), size, alignment);
 			}
-			free_ = [](void* ptr, void* p) { static_cast<T*>(ptr)->free(p); };
-		}
+			void reallocable() {
+				return reallocate_;
+			}
+			void* reallocate(void* ptr, size_t size, size_t alignment = alignof(max_align_t)) {
+				assert(reallocate_); return reallocate_(C::get_this(), ptr, size, alignment);
+			}
+			void free(void* ptr) noexcept {
+				assert(free_); if (ptr) { free_(C::get_this(), ptr); }
+			}
 
-	private:
+			template<typename T>
+			void rebind() noexcept {
+				allocate_ = [](void* ptr, size_t size, size_t alignment) -> void* {
+					return static_cast<T*>(ptr)->allocate(size, alignment);
+					};
+				if constexpr (requires(T & value, void* ptr, size_t size, size_t alignment) { 
+					{ value.reallocate(ptr, size, alignment) } -> ::std::convertible_to<void*>; 
+				}) {
+					reallocate_ = [](void* ptr, void* re, size_t size, size_t alignment) -> void* {
+						return static_cast<T*>(ptr)->reallocate(re, size, alignment);
+					};
+				}
+				free_ = [](void* ptr, void* p) { static_cast<T*>(ptr)->free(p); };
+			}
+
+			template<typename T>
+			void rebind(apply<T> const& other) noexcept {
+				C::rebind(other);
+				vptr_ = other.vptr_;
+			}
+
+		private:
+			handle_allocator vptr_;
+		};
+
 		void* (*allocate_)(void*, size_t, size_t);
 		void* (*reallocate_)(void*, void*, size_t, size_t);
 		void(*free_)(void*, void*);
@@ -243,8 +261,8 @@ VKTL_EXPORT_ namespace vktl {
 	namespace extensions {
 		// use for internal api's handle allocation.
 		// not for gpu memory allocation.
-		struct allocate_from { 
-			detail::box<detail::default_handle_allocator_vptr> allocator; 
+		struct allocate_from {
+			detail::box<vptr::handle_allocator> allocator; 
 		};
 
 		// some of the object must contain at least one of these object.
@@ -305,7 +323,12 @@ VKTL_EXPORT_ namespace vktl {
 	namespace compiler_extensions {
 		inline constexpr struct glsl_ {} glsl {};
 		inline constexpr struct hlsl_ {} hlsl {};
-		struct optimize { uint8_t level; };
+		struct optimize { 
+			uint8_t level;
+			bool reserve_unused_bindings = false;
+			bool reserve_unused_spec_constants = false;
+			bool validate = true;
+		};
 		inline constexpr struct contain_debug_info_ {} contain_debug_info {};
 		inline constexpr struct customize_include_ {} customize_include {};
 	}

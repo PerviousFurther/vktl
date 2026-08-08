@@ -105,8 +105,12 @@ VKTL_EXPORT_ namespace vktl::detail {
 		static constexpr void unlock() noexcept {}
 	} lock_duck {};
 
-	template<typename Base, typename...Ts>
-	struct b : Base {
+	inline constexpr struct call_duck_ {
+		void operator()(auto&&...) {}
+	} call_duck {};
+
+	template<typename C, typename...Ts>
+	struct b : C {
 		constexpr b() = default;
 		constexpr b(auto&&...) {}
 
@@ -128,7 +132,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 		static constexpr lock_duck_& get_lock() noexcept { return lock_duck; }
 
 	protected:
-		using self = c<i<1u>, b<Base, Ts...>>;
+		using self = c<i<1u>, b<C, Ts...>>;
 
 		static constexpr void relocate() noexcept {}
 		static constexpr auto allocator() noexcept { return nullptr; }
@@ -138,8 +142,8 @@ VKTL_EXPORT_ namespace vktl::detail {
 		constexpr self* as_this() noexcept { return static_cast<self*>(this); }
 		constexpr self const* as_this() const noexcept { return static_cast<self const*>(this); }
 	};
-	template<typename Base, typename...Ts>
-	struct tuple_like<b<Base, Ts...>> : ::std::true_type {};
+	template<typename C, typename...Ts>
+	struct tuple_like<b<C, Ts...>> : ::std::true_type {};
 
 	template<typename...Args>
 	struct ob_ : ob_<b<empty>, Args...> {
@@ -150,10 +154,10 @@ VKTL_EXPORT_ namespace vktl::detail {
 		}
 	};
 
-	template<typename...Cs, typename Base, typename First, typename...Args>
+	template<typename...Cs, typename C, typename First, typename...Args>
 		requires(can_express<First>)
-	struct ob_<b<Base, Cs...>, First, Args...> : ob_<b<Base, First, Cs...>, Args...> {
-		using next = ob_<b<Base, First, Cs...>, Args...>;
+	struct ob_<b<C, Cs...>, First, Args...> : ob_<b<C, First, Cs...>, Args...> {
+		using next = ob_<b<C, First, Cs...>, Args...>;
 
 		static constexpr auto make_tuple(auto first, auto second, auto&&, auto&&...values) {
 			return next::make_tuple(::std::move(first), ::std::move(second), forward_(values)...);
@@ -188,7 +192,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 	template<typename ...Ts>
 	from(Ts&...) -> from<Ts...>;
 
-	template<typename Base>
+	template<typename C>
 	struct use_base {};
 
 	template<typename T>
@@ -197,18 +201,18 @@ VKTL_EXPORT_ namespace vktl::detail {
 	};
 
 	// already have base.
-	template<typename Base, typename...Cs, typename T, typename...Us, typename...Args>
-	struct ob_<b<use_base<Base>, from<Us...>, Cs...>, object<T>, Args...> : ob_<b<use_base<Base>, from<Us..., object<T>>, Cs...>, Args...> {
-		using next = ob_<b<use_base<Base>, from<Us..., object<T>>, Cs...>, Args...>;
+	template<typename C, typename...Cs, typename T, typename...Us, typename...Args>
+	struct ob_<b<use_base<C>, from<Us...>, Cs...>, object<T>, Args...> : ob_<b<use_base<C>, from<Us..., object<T>>, Cs...>, Args...> {
+		using next = ob_<b<use_base<C>, from<Us..., object<T>>, Cs...>, Args...>;
 
 		static constexpr auto make_tuple(auto first, auto second, object<T>& fir, auto&&...args) {
 			return next::make_tuple(::std::tuple_cat(::std::move(first), ::std::forward_as_tuple(fir)), ::std::move(second), forward_(args)...);
 		}
 		static constexpr auto make_tuple(auto, auto, object<T>&&, auto&&...) = delete; // not allow right value reference on object.
 	};
-	template<typename Base, typename...Cs, typename T, typename...Args>
-	struct ob_<b<use_base<Base>, Cs...>, object<T>, Args...> : ob_<b<use_base<Base>, from<object<T>>, Cs...>, Args...> {
-		using next = ob_<b<use_base<Base>, from<object<T>>, Cs...>, Args...>;
+	template<typename C, typename...Cs, typename T, typename...Args>
+	struct ob_<b<use_base<C>, Cs...>, object<T>, Args...> : ob_<b<use_base<C>, from<object<T>>, Cs...>, Args...> {
+		using next = ob_<b<use_base<C>, from<object<T>>, Cs...>, Args...>;
 
 		static constexpr auto make_tuple(auto, auto second, object<T>& fir, auto&&...args) {
 			return next::make_tuple(::std::forward_as_tuple(fir), ::std::move(second), forward_(args)...);
@@ -216,8 +220,8 @@ VKTL_EXPORT_ namespace vktl::detail {
 		static constexpr auto make_tuple(auto, auto, object<T>&&, auto&&...) = delete; // not allow right value reference on object.
 	};
 
-	template<typename Base, typename...Cs, typename T, typename...Args>
-	struct ob_<b<use_base<Base>, Cs...>, use_base<T>, Args...> : ob_<b<use_base<T>, Cs...>, Args...> {
+	template<typename C, typename...Cs, typename T, typename...Args>
+	struct ob_<b<use_base<C>, Cs...>, use_base<T>, Args...> : ob_<b<use_base<T>, Cs...>, Args...> {
 		using next = ob_<b<use_base<T>, Cs...>, Args...>;
 		static constexpr auto make_tuple(auto first, auto second, use_base<T>, auto&&...args) {
 			return next::make_tuple(::std::move(first), ::std::move(second), forward_(args)...);
@@ -342,9 +346,9 @@ VKTL_EXPORT_ namespace vktl::detail {
 	template<typename...Ts>
 	struct tuple_like<s_<Ts...>> : ::std::true_type {};
 
-	template<typename Base, typename...Cs, typename...Ts, typename...Args>
-	struct ob_<b<Base, Cs...>, s_<Ts...>, Args...> : ob_<b<Base, Cs...>, Ts..., Args...> {
-		using next = ob_<b<Base, Cs...>, Ts..., Args...>;
+	template<typename C, typename...Cs, typename...Ts, typename...Args>
+	struct ob_<b<C, Cs...>, s_<Ts...>, Args...> : ob_<b<C, Cs...>, Ts..., Args...> {
+		using next = ob_<b<C, Cs...>, Ts..., Args...>;
 
 		static constexpr auto make_tuple(auto first, auto second, s_<Ts...>&& ia, auto&&...args) {
 			return::std::apply(

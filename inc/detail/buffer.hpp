@@ -2,31 +2,50 @@
 
 VKTL_EXPORT_ namespace vktl::vptr {
 
-	template<typename C>
-	struct descriptor : C {
+	
+	struct descriptor {
+		template<typename C>
+		struct apply : C {
+
+		};
+	
 
 	};
 
-	template<typename C, typename H>
-	struct resource_view : handle_owner<C, H> {
+	template<typename H>
+	struct resource_view {
 		using handle_type = H;
 
-	protected:
-		using base = handle_owner<C, H>;
+		template<typename C>
+		struct apply : C {
+			template<typename>
+			friend struct apply;
 
-		template<typename T>
-		void rebind() {
-			base::template rebind<T>();
-		}
-		template<typename O>
-		void rebind(resource_view<O, H> const& other) {
-			base::rebind(other);
-			set_handle_ = other.set_handle_;
-		}
+			using handle_type = H;
 
-	private:
-		detail::box<descriptor>(*get_handle_)(void const*);
-		void(*set_handle_)(void*, box<descriptor>);
+			box<descriptor> descriptor() const {
+				return vptr_.get_descriptor_(C::get_this());
+			}
+
+			template<typename T>
+			void rebind() noexcept {
+				C::template rebind<T>();
+				vptr_.get_descriptor_ = [](void const* ptr) -> box<descriptor> {
+					return static_cast<T const*>(ptr)->get_descriptor();
+				};
+			}
+
+			template<typename O>
+			void rebind(apply<O> const& other) noexcept {
+				C::rebind(other);
+				vptr_ = other.vptr_;
+			}
+
+		private:
+			resource_view vptr_;
+		};
+
+		box<descriptor>(*get_descriptor_)(void const*) = nullptr;
 	};
 }
 
@@ -46,7 +65,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 			if (!handle_) {
 				::std::lock_guard _{ N::get_lock() };
 				N::init();
-				VK_ vkCreateBuffer(handle_from<N, device>(), &info, N::allocator(), &handle_)
+				VK_ vkCreateBuffer(handle_of<N, device>(), &info, N::allocator(), &handle_)
 					| popup{ "[BUFFER] Create buffer failure." };
 			}
 		}
@@ -56,20 +75,26 @@ VKTL_EXPORT_ namespace vktl::detail {
 				for (auto c : childs_) { c.reset(); }
 				::std::lock_guard _{ N::get_lock() };
 				childs_.clear();
-				VK_ vkDestroyBuffer(handle_from<N, device>(), handle_, N::allocator());
+				VK_ vkDestroyBuffer(handle_of<N, device>(), handle_, N::allocator());
 			}
 		}
 
 		auto handle() const noexcept { return handle_.value; }
 
+		template<typename T>
+		void append_child(object<T>& object) {
+			childs_.emplace_back(object);
+		}
+
 	protected:
-		VK_ VkBufferCreateInfo info;
+		VK_ VkBufferCreateInfo info {
+			.sType = VK_ VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+		};
 
 	private:
 		reset_if_copy<VK_ VkBuffer> handle_;
+		vector<box<vptr::resetable>> childs_;
 		access_list<default_buffer_access> access_;
-		vector<type_box<quote<vptr::reusable>, 
-			bind_back<vptr::resource_view, VK_ VkBufferView>>> childs_;
 	};
 
 
@@ -83,28 +108,42 @@ VKTL_EXPORT_ namespace vktl::detail {
 		~m() { reset(); }
 
 		void init() {
+			N::init();
+
+			::std::lock_guard _{ N::get_lock() };
 			if (handle_) {
-				N::init();
-				VK_ vkCreateBufferView(handle_from<N, device>(), &info, N::allocator(), &handle_)
+				VK_ vkCreateBufferView(handle_of<device>(this), &info, N::allocator(), &handle_)
 					| popup{ "[BUFFER_VIEW] Create buffer view failure." };
 			}
 		}
 
 		void reset() {
 			if (handle_) {
-				VK_ vkDestroyBufferView(handle_from<N, device>(), handle_, N::allocator());
+				for (auto child : childs_) {
+					child.reset();
+				}
+
+				::std::lock_guard _{ N::get_lock() };
+				VK_ vkDestroyBufferView(handle_of<device>(this),
+					exchange(handle_, VK_NULL_HANDLE), N::allocator());
 			}
 		}
 
 		auto handle() const noexcept { return handle_.value; }
 
+		template<typename T>
+		void append_child(object<T>& object) {
+			childs_.emplace_back(object);
+		}
+
 	protected:
-		VK_ VkBufferViewCreateInfo info;
+		VK_ VkBufferViewCreateInfo info{ 
+			.sType = VK_ VK_STRUCTURE_TYPE_BUFFER_VIEW_CREATE_INFO 
+		};
 
 	private:
 		reset_if_copy<VK_ VkBufferView> handle_;
-		vector<type_box<quote<vptr::reusable>,
-			bind_back<vptr::descriptor, VK_ VkBufferView>>> childs_;
+		vector<box<vptr::resetable>> childs_;
 	};
 
 

@@ -5,14 +5,14 @@
 VKTL_EXPORT_ namespace vktl::detail {
 
 	template<typename N>
-	struct m<device, N> : basic_layers_and_extensions<N> {
-		using base = basic_layers_and_extensions<N>;
+	struct m<device, N> : basic_layers<N> {
+		using base = basic_layers<N>;
 
 		constexpr m(device const& d, auto&&...others)
 			: base{ forward_(others)... }
 			, infos_{} {
-			phydv_ = N::template parent<instance>().physical_device(d.index).handle();
-			infos_.sType = VK_ VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+
+			
 
 		}
 
@@ -32,6 +32,10 @@ VKTL_EXPORT_ namespace vktl::detail {
 		void init() {
 			if (!device_) {
 				N::init();
+				auto ins = parent_of<instance>(this);
+				auto phydv = ins->physical_device(d.index);
+				phydv_ = phydv.handle();
+				infos_.sType = VK_ VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
 				VK_ vkCreateDevice(phydv_, &infos_, N::allocator(), &device_)
 					| popup{ "[Device] Create device failure." };
 			}

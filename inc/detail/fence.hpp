@@ -14,14 +14,14 @@ VKTL_EXPORT_ namespace vktl::detail {
 		void init() {
 			if (handle_) {
 				N::init();
-				VK_ vkCreateFence(handle_from<N, device>(), &info,
+				VK_ vkCreateFence(handle_of<N, device>(), &info,
 					N::allocator(), &handle_) | popup{ "[FENCE] Create fence failure." };
 			}
 		}
 
 		void reset() noexcept {
 			if (handle_) {
-				VK_ vkDestroyFence(handle_from<N, device>(), handle_, N::allocator());
+				VK_ vkDestroyFence(handle_of<N, device>(), handle_, N::allocator());
 			}
 		}
 

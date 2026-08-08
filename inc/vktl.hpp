@@ -67,17 +67,19 @@
 # include <concepts>
 #endif
 
-#if VKTL_HAVE_STD_ && !defined(VKTL_NO_ASSERT)
-# include <assert.h>
-#else
-# if defined(_MSC_VER)
-#  define assert(x) __assume(x)
-# elif defined(__clang__)
-#  define assert(x) __builtin_assume(x)
-# elif defined(__GNU__)
-#  define assert(x) __attribute__((assume(x)))
+#if !defined(assert)
+# if VKTL_HAVE_STD_ && !defined(VKTL_NO_ASSERT)
+#  include <assert.h>
 # else
-#  define assert(x)
+#  if defined(_MSC_VER)
+#   define assert(x) __assume(x)
+#  elif defined(__clang__)
+#   define assert(x) __builtin_assume(x)
+#  elif defined(__GNU__)
+#   define assert(x) __attribute__((assume(x)))
+#  else
+#   define assert(x)
+#  endif
 # endif
 #endif
 
