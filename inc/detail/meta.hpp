@@ -107,4 +107,22 @@ VKTL_EXPORT_ namespace vktl::detail {
 	template<typename...Ts>
 	struct tuple_like<ts<Ts...>> : ::std::true_type {};
 
+	template<template<typename...>typename Tp>
+	struct quote {
+		template<typename...Ts>
+		using apply = Tp<Ts...>;
+	};
+
+	template<template<typename...>typename Tp, typename...Ts>
+	struct bind_back {
+		template<typename...Us>
+		using apply = Tp<Us..., Ts...>;
+	};
+
+	template<template<typename...>typename Tp, typename...Ts>
+	struct bind_front {
+		template<typename...Us>
+		using apply = Tp<Ts..., Us...>;
+	};
+
 }

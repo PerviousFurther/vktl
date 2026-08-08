@@ -12,8 +12,9 @@ VKTL_EXPORT_ namespace vktl::detail {
 		template<typename T>
 		struct closure {
 			friend auto operator|(VK_ VkResult result, closure self) noexcept(false) {
-				if (!self.value_->handle_error(result))
+				if (!self.value_->handle_error(result)) VKTL_UNLIKELY {
 					throw error{ uint32_t(result), self.error_ };
+				}
 			}
 
 			T* value_;
@@ -27,7 +28,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 		VKTL_MAYBE_UNUSED
 			friend void operator|(VK_ VkResult result, popup self) noexcept(false) {
-			if (result != VK_ VK_SUCCESS) {
+			if (result != VK_ VK_SUCCESS) VKTL_UNLIKELY {
 				throw error{ uint32_t(result), self.error_ };
 			}
 		}
@@ -96,14 +97,21 @@ VKTL_EXPORT_ namespace vktl::detail {
 	struct is_queryable : ::std::is_same<::std::remove_cvref_t<T>, ::std::remove_cvref_t<C>> {};
 
 	struct empty {};
+	struct always_one { operator uint32_t() const noexcept { return 1u; } };
+
+	inline /* constinit */ struct lock_duck_ {
+		static constexpr void lock() noexcept {}
+		static constexpr bool try_lock() noexcept { return true; }
+		static constexpr void unlock() noexcept {}
+	} lock_duck {};
 
 	template<typename Base, typename...Ts>
 	struct b : Base {
 		constexpr b() = default;
 		constexpr b(auto&&...) {}
 
-		static constexpr uint32_t add_ref() noexcept { return 1u; }
-		static constexpr uint32_t release() noexcept { return 1u; }
+		static constexpr always_one add_ref() noexcept { return {}; }
+		static constexpr always_one release() noexcept { return {}; }
 
 		template<typename>
 		static constexpr auto parent() noexcept { return nullptr; }
@@ -116,6 +124,8 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 		static constexpr void init() noexcept {}
 		static constexpr void reset() noexcept {}
+
+		static constexpr lock_duck_& get_lock() noexcept { return lock_duck; }
 
 	protected:
 		using self = c<i<1u>, b<Base, Ts...>>;
@@ -145,8 +155,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 	struct ob_<b<Base, Cs...>, First, Args...> : ob_<b<Base, First, Cs...>, Args...> {
 		using next = ob_<b<Base, First, Cs...>, Args...>;
 
-		static constexpr auto make_tuple(auto first, auto second, auto&&, auto&&...values)
-		{
+		static constexpr auto make_tuple(auto first, auto second, auto&&, auto&&...values) {
 			return next::make_tuple(::std::move(first), ::std::move(second), forward_(values)...);
 		}
 	};
@@ -155,12 +164,12 @@ VKTL_EXPORT_ namespace vktl::detail {
 	struct ob_<b<Cs...>, First, Args...> : ob_<b<Cs...>, Args...> {
 		using next = ob_<b<Cs...>, Args...>;
 
-		static constexpr auto make_tuple(auto first, auto second, auto&& fir, auto&&...values)
-		{
-			return next::make_tuple(::std::move(first), ::std::tuple_cat(::std::forward_as_tuple(forward_(fir)), ::std::move(second)), forward_(values)...);
+		static constexpr auto make_tuple(auto first, auto second, auto&& fir, auto&&...values) {
+			return next::make_tuple(::std::move(first), 
+				::std::tuple_cat(::std::forward_as_tuple(forward_(fir)), ::std::move(second)), 
+				forward_(values)...);
 		}
 	};
-
 
 	template<typename...Ts>
 	struct from : ::std::tuple<Ts*...> {
@@ -297,9 +306,12 @@ VKTL_EXPORT_ namespace vktl::detail {
 		}
 	};
 
-	struct shared_single_thread_object {};
-	struct shared_cross_thread_object {};
-
+	// the object contain a lock help operation thread safe. 
+	inline constexpr struct lockable_ {} lockable;
+	// cross thread shared use reference counter (not thread safe).
+	inline constexpr struct shared_ {} shared;
+	// cross thread shared use atomic reference counter.
+	inline constexpr struct cross_thread_shared_ {} cross_thread_shared;
 
 	template<typename T>
 	struct is_host : ::std::false_type {};

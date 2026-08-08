@@ -16,7 +16,6 @@
 #	define VKTL_EXPORT_
 #endif
 
-
 #if !defined(VKTL_NO_STD)
 #   define VKTL_HAVE_STD_ 1
 #else
@@ -59,20 +58,13 @@
 # define VKTL_MAYBE_UNUSED
 #endif
 
-#include "detail/public.hpp"
-#include "detail/math.hpp"
-
-//--------------------------DETAIL SCOPE---------------------------
-
 #if VKTL_HAVE_STD_
-# include <string>
+# include <utility>
+# include <span>
+# include <string_view>
+# include <tuple>
 # include <type_traits>
 # include <concepts>
-# include <vector>
-# include <unordered_map>
-# include <algorithm>
-# include <atomic>
-# include <array>
 #endif
 
 #if VKTL_HAVE_STD_ && !defined(VKTL_NO_ASSERT)
@@ -89,11 +81,30 @@
 # endif
 #endif
 
+#include "detail/public.hpp"
+#include "detail/math.hpp"
+
+//--------------------------DETAIL SCOPE---------------------------
+
+#if !defined(VKTL_NO_DETAIL)
+
+#if VKTL_HAVE_STD_
+# include <string>
+# include <vector>
+# include <unordered_map>
+# include <algorithm>
+# include <atomic>
+# include <mutex>
+# include <array>
+# include <ranges>
+#endif
+
 #if !defined(VK_NAMESPACE)
 #define VK_NAMESPACE 
 #endif
 
 #define VK_ VK_NAMESPACE::
+
 
 namespace VK_NAMESPACE {
 #include <vulkan/vulkan.h>
@@ -110,6 +121,9 @@ namespace VK_NAMESPACE {
 
 VKTL_EXPORT_ namespace vktl {
 	using detail::object;
+	using detail::shared;
+	using detail::cross_thread_shared;
+	using detail::lockable;
 	using detail::operator|;
 }
 
@@ -117,7 +131,6 @@ VKTL_EXPORT_ namespace vktl {
 
 #include "detail/window.hpp"
 #include "detail/device.hpp"
-
 #include "detail/compiler.hpp"
 #include "detail/pass.hpp"
 #include "detail/pipe.hpp"
@@ -132,6 +145,8 @@ VKTL_EXPORT_ namespace vktl {
 
 #include "detail/execution.hpp"
 #include "detail/task.hpp"
+
+#endif
 
 #undef VK_ 
 #undef forward_

@@ -1,8 +1,95 @@
 #pragma once
 
+VKTL_EXPORT_ namespace vktl::vptr {
+	using detail::box;
+	using detail::type_box;
+
+	template<typename C>
+	struct initable : C {
+		template<typename>
+		friend struct initable;
+	protected:
+		using base = C;
+
+		template<typename T>
+		void rebind() {
+			base::template rebind<T>();
+			init_ = [](void* ptr) { static_cast<T*>(ptr_)->init(); };
+		}
+
+		template<typename T>
+		void rebind(initable<T> const& other) {
+			base::rebind(other);
+			init_ = other.init_;
+		}
+
+	public:
+		void init() { init_(C::get_this()); }
+
+	private:
+		void(*init_)(void*);
+	};
+
+	template<typename C>
+	struct resetable : C {
+		template<typename>
+		friend struct resetable;
+
+	protected:
+		using base = C;
+
+		template<typename T>
+		void rebind() {
+			base::template rebind<T>();
+			reset_ = [](void* ptr) { static_cast<T*>(ptr)->reset(); };
+		}
+
+		template<typename T>
+		void rebind(resetable<T> const& other) {
+			base::rebind(other);
+			reset_ = other.reset_;
+		}
+
+	public:
+		void reset() {
+			if (reset_) { reset_(C::get_this()); }
+		}
+
+	private:
+		void(*reset_)(void*) = nullptr;
+	};
+
+	template<typename C>
+	using reusable = resetable<initable<C>>;
+
+	template<typename C, typename H>
+	struct handle_owner : C {
+		using handle_type = H;
+
+	protected:
+		using base = C;
+
+		template<typename T>
+		void rebind() {
+			C::template rebind<T>();
+			handle_ = [](const void* ptr) -> handle_type {
+				return static_cast<const T*>(ptr)->handle();
+			};
+		}
+
+	public:
+		handle_type handle() const {
+			return handle_(C::get_this());
+		}
+
+	private:
+		handle_type(*handle_)(void const*) = nullptr;
+	};
+}
+
 VKTL_EXPORT_ namespace vktl::detail {
 	template<typename N>
-	struct m<shared_single_thread_object, N> : N {
+	struct m<shared_, N> : N {
 		m(auto, auto&&...others)
 			: N{ forward_(others)... }
 		{
@@ -10,11 +97,24 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 		uint32_t add_ref() noexcept {
 			assert(refc_); // try add from on zero from's object.
-			return ++refc_;
+			if constexpr (object_of<N, lockable_>) {
+				::std::lock_guard _{N::get_lock()};
+				return ++refc_;
+			}
+			else {
+				return ++refc_;
+			}
+			
 		}
 		uint32_t release() noexcept {
 			assert(refc_); // try release on zero from's object.
-			return --refc_;
+			if constexpr (object_of<N, lockable_>) {
+				::std::lock_guard _{ N::get_lock() };
+				return ++refc_;
+			}
+			else {
+				return --refc_;
+			}
 		}
 
 	private:
@@ -22,7 +122,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 	};
 
 	template<typename N>
-	struct m<shared_cross_thread_object, N> : N {
+	struct m<cross_thread_shared_, N> : N {
 		m(auto, auto&&...others)
 			: N{ forward_(others)... }
 		{
@@ -73,9 +173,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 		}
 
 	protected:
-		void init() {
-			::std::apply([](auto...ptr) { ((ptr->init()), ...); }, parents_);
-		}
+		void init() { ::std::apply([](auto...ptr) { ((ptr->init()), ...); }, parents_); }
 
 		// void reset() {
 		// 	::std::apply([](auto...ptr) { ((ptr->reset()), ...); }, parents_);
@@ -138,182 +236,56 @@ VKTL_EXPORT_ namespace vktl::detail {
 		::std::tuple<Ts*...> parents_;
 	};
 
-	template<typename N, typename T>
-	constexpr auto handle_from() noexcept { return N::template parent<T>()->handle(); }
+	template<typename N>
+	struct m<lockable_, N> : N {
+		using mutex_type = ::std::mutex;
 
-
-	template<template<typename>typename VPtr>
-	struct box : VPtr<box<VPtr>> {
-		using base = VPtr<box<VPtr>>;
-
-		template<typename T>
-		constexpr box(::std::in_place_t, T& ptr)
-			: ptr_{ &ptr } {
-			base::template rebind<T>();
-		}
-
-		template<typename T>
-		constexpr box(T& ptr)
-			: ptr_{ &ptr } {
-			rebind<T>();
-		}
-
-		template<typename T>
-		constexpr box(T* ptr)
-			: ptr_{ ptr } {
-			rebind<T>();
-		}
-
-		// template<typename T>
-		// constexpr box(share<T> ptr)
-		// 	: ptr_{ ptr.get() } {
-		// 	rebind<T>();
-		// }
-
-		constexpr box(box const& other)
-			: base{ static_cast<base const&>(other) }
-			, ptr_{ other.ptr_ }
-			, release_{ other.release_ }
-			, add_ref_{ other.add_ref_ } {
-			assert(add_ref_ || !add_ref_ && !release_);
-			if (add_ref_ && ptr_) {
-				add_ref_(ptr_);
-			}
-		}
-		constexpr box& operator=(box const& other) {
-			if (&other != this) {
-				reset();
-
-				add_ref_ = other.add_ref_;
-				release_ = other.release_;
-
-				assert(add_ref_ || !add_ref_ && !release_);
-
-				static_cast<base&>(*this) = other;
-				if (ptr_ == other.ptr_ && add_ref_) {
-					add_ref_(ptr_);
-				}
-			}
-			return *this;
-		}
-
-		constexpr box(box&& other) noexcept
-			: base{ static_cast<base&&>(other) }
-			, ptr_{ ::std::exchange(other.ptr_, nullptr) }
-			, add_ref_{ ::std::exchange(other.add_ref_, nullptr) }
-			, release_{ ::std::exchange(other.release_, nullptr) }
-		{
-		}
-
-		constexpr box& operator=(box&& other) noexcept {
-			if (this != &other) {
-				reset();
-				static_cast<base&>(*this) = static_cast<base&&>(other);
-				ptr_ = ::std::exchange(other.ptr_, nullptr);
-				add_ref_ = ::std::exchange(other.add_ref_, nullptr);
-				release_ = ::std::exchange(other.release_, nullptr);
-			}
-			return *this;
-		}
-
-		~box() { reset(); }
-
-		template<typename T>
-		void rebind() {
-			base::template rebind<T>();
-			if constexpr (requires (T & v) { v.add_ref(); v.release(); }) {
-				add_ref_ = [](void* ptr) { static_cast<T*>(ptr)->add_ref(); };
-				release_ = [](void* ptr) { static_cast<T*>(ptr)->release(); };
-			}
-			else {
-				release_ = [](void* ptr) { delete static_cast<T*>(ptr); };
-			}
-		}
-
-		bool shared() const noexcept { return add_ref_; }
-		bool unique() const noexcept { return !add_ref_ && release_; }
-		bool view() const noexcept { return !add_ref_ && !release_; }
-
-		void reset() noexcept {
-			if (release_) {
-				::std::exchange(release_, nullptr)(::std::exchange(ptr_, nullptr));
-			}
-			add_ref_ = nullptr;
-		}
-
-		void* get() const noexcept { return ptr_; }
+		m(lockable_, auto&&...others) : N{} {}
 
 	private:
-		void* ptr_ = nullptr;
-		::std::uint32_t(*add_ref_)(void*) = nullptr;
-		::std::uint32_t(*release_)(void*) = nullptr;
+		mutable::std::mutex lock_;
 	};
 
-	template<typename C>
-	struct default_vptr {
-	protected:
-		constexpr auto self() const noexcept {
-			return static_cast<C const*>(this)->ptr();
+	template<typename T>
+	constexpr auto is_lockable = object_of<T, lockable_>;
+
+
+
+	using namespace extensions;
+
+	template<typename N>
+	struct m<allocate_from, N> : N {
+	private:
+		using allocator_type = box<default_handle_allocator_vptr>;
+
+	public:
+		constexpr m(allocate_from const& from, auto&&...others)
+			: N{forward_(others)...}
+			, allocator_{ from.allocator }
+			, callbacks_{
+				.pUserData = &allocator_,
+				.pfnAllocation = [](void* p, size_t size, size_t alignment, VkSystemAllocationScope) -> void* {
+					return static_cast<allocator_type*>(p)->allocate(size, alignment);
+				},
+				.pfnReallocation = alloator_.reallocable() ? [](void* p, void* ori, size_t size, size_t alignment, VkSystemAllocationScope) -> void* {
+					return static_cast<allocator_type*>(p)->reallocate(ori, size, alignment);
+				} : nullptr,
+				.pfnFree = [](void* p, void* ptr) -> void {
+					static_cast<allocator_type*>(p)->free(ptr);
+				},
+				.pfnInternalAllocation = nullptr,
+				.pfnInternalFree = nullptr,
+			} {
+			
 		}
+
+		void relocate() noexcept { callbacks_.pUserData = allocator_; }
+
+		constexpr VK_ VkAllocationCallbacks const* allocator() const { return &callback_; }
+
+	private:
+		allocator_type allocator_;
+		VK_ VkAllocationCallbacks callbacks_;
 	};
-
-	struct default_buffer_access : range<VK_ VkDeviceSize> {
-		using range_type = range<VK_ VkDeviceSize>;
-
-		uint16_t index;
-		VK_ VkBufferCreateFlags flags;
-		VK_ VkBufferUsageFlags usage;
-		VK_ VkPipelineStageFlags stage;
-		VK_ VkAccessFlags access;
-		VK_ VkDependencyFlags dependency;
-
-		constexpr bool operator==(default_buffer_access const& other) const noexcept {
-			return access == other.access;
-		}
-
-		constexpr auto& operator|=(default_buffer_access const& other) noexcept {
-			if (&other != this) {
-				flags |= other.flags; usage |= other.usage;
-				stage |= other.stage;  access |= other.access;
-				dependency |= other.dependency;
-			}
-			return *this;
-		}
-	};
-
-	struct default_image_access : VK_ VkImageSubresourceRange {
-		using range_type = VK_ VkImageSubresourceRange;
-		// uint32_t width;
-		// uint32_t height;
-		// uint16_t depth;
-		uint16_t index;
-		VK_ VkImageCreateFlags flags;
-		VK_ VkImageUsageFlags usage;
-		VK_ VkImageLayout layout; // recommanded layout.
-		VK_ VkPipelineStageFlags stage;
-		VK_ VkAccessFlags access;
-		VK_ VkDependencyFlags dependency;
-
-		constexpr bool operator==(default_image_access const& other) const noexcept {
-			return access == other.access;
-		}
-
-		constexpr auto& operator|=(default_image_access const& other) noexcept {
-			if (&other != this) {
-				if (layout == VK_ VK_IMAGE_LAYOUT_UNDEFINED) {
-					layout = other.layout;
-				}
-				else if (other.layout == VK_ VK_IMAGE_LAYOUT_GENERAL || layout != other.layout) {
-					layout = VK_ VK_IMAGE_LAYOUT_GENERAL;
-				}
-
-				flags |= other.flags; usage |= other.usage;
-				stage |= other.stage; access |= other.access;
-				dependency |= other.dependency;
-			}
-			return *this;
-		}
-	};
-
-
 }
+

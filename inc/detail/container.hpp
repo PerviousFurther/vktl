@@ -2,41 +2,50 @@
 
 VKTL_EXPORT_ namespace vktl::detail {
 
+	// currently standard c++ is not support *provenance* object.
+	// thus object emplace inside this list should inherit from poly_list::node.
 	class poly_list {
-		struct node_header {
-			node_header* prev = nullptr;
-			node_header* next = nullptr;
-
-			using deleter_type = void(*)(node_header const*) noexcept;
-			deleter_type deleter = nullptr;
-
-			constexpr node_header() noexcept = default;
-			node_header(const node_header&) = delete;
-			node_header& operator=(const node_header&) = delete;
+	public:
+		struct node {
+			friend poly_list;
 
 			template<typename T>
+			constexpr node(::std::in_place_type_t<T>) noexcept 
+				: deleter{ [](node const* ptr) noexcept { delete static_cast<T*>(ptr); } } 
+			{}
+
+			node(const node&) = delete;
+			node& operator=(const node&) = delete;
+			node(node&&) noexcept = delete;
+			node& operator=(node&&) noexcept = delete;
+
+			template<::std::derived_from<node> T >
 			auto& as() const noexcept { return static_cast<const node<T>*>(this)->value; }
-			template<typename T>
+			template<::std::derived_from<node> T>
 			auto& as() noexcept { return static_cast<node<T>*>(this)->value; }
 
-			template<typename T>
+			template<::std::derived_from<node> T>
 			operator T& () noexcept { return as<T>(); }
-			template<typename T>
+			template<::std::derived_from<node> T>
 			operator T const& () const noexcept { return as<T>(); }
+
+		private:
+			void(*deleter)(node const*) noexcept = nullptr;
+			node* prev = nullptr;
+			node* next = nullptr;
 		};
 
-		template<typename T>
-		struct node : node_header {
-			T value;
+		// template<typename T>
+		// struct node : node {
+		// 	T value;
+		// 
+		// 	template<typename... Args>
+		// 	constexpr explicit node(Args&&... args)
+		// 		: value(static_cast<Args&&>(args)...) {
+		// 		this->deleter = [](node const* ptr) noexcept { delete static_cast<node*>(ptr); };
+		// 	}
+		// };
 
-			template<typename... Args>
-			constexpr explicit node(Args&&... args)
-				: value(static_cast<Args&&>(args)...) {
-				this->deleter = [](node_header const* ptr) noexcept { delete static_cast<node*>(ptr); };
-			}
-		};
-
-	public:
 		using size_type = ::std::size_t;
 		using difference_type = ::std::ptrdiff_t;
 
@@ -45,7 +54,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 		struct basic_iterator {
 			friend poly_list;
 
-			using value_type = ::std::conditional_t<is_const, node_header const, node_header>;
+			using value_type = ::std::conditional_t<is_const, node const, node>;
 			using difference_type = ::std::ptrdiff_t;
 			using reference = value_type&;
 			using pointer = value_type*;
@@ -101,19 +110,19 @@ VKTL_EXPORT_ namespace vktl::detail {
 			return *this;
 		}
 
-		template<typename T, typename... Args>
+		template<::std::derived_from<node> T, typename... Args>
 		T& emplace(const_iterator where, Args&&... args) {
-			auto* obj = new node<T>(static_cast<Args&&>(args)...);
+			auto* obj = new T(static_cast<Args&&>(args)...);
 			insert_before(where.ptr_, obj);
 			return obj->value;
 		}
 
-		template<typename T, typename... Args>
+		template<::std::derived_from<node> T, typename... Args>
 		T& emplace_back(Args&&... args) {
 			return emplace<T>(&root_, static_cast<Args&&>(args)...);
 		}
 
-		template<typename T, typename... Args>
+		template<::std::derived_from<node> T, typename... Args>
 		T& emplace_front(Args&&... args) {
 			return emplace<T>(root_.next, static_cast<Args&&>(args)...);
 		}
@@ -127,7 +136,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 		iterator erase(const_iterator pos) noexcept {
 			auto* n = pos.ptr_;
-			node_header* next_node = n->next;
+			node* next_node = n->next;
 
 			n->prev->next = n->next;
 			n->next->prev = n->prev;
@@ -137,10 +146,9 @@ VKTL_EXPORT_ namespace vktl::detail {
 			return iterator(next_node);
 		}
 
-		template<typename T>
+		template<::std::derived_from<node> T>
 		void erase(T& value) noexcept {
-			auto* node_ptr = reinterpret_cast<node_header*>(
-				reinterpret_cast<char*>(::std::addressof(value)) - offsetof(node<T>, value));
+			auto* node_ptr = static<node*>(&value);
 			erase(const_iterator(node_ptr));
 		}
 
@@ -175,7 +183,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 			root_.prev = &root_;
 		}
 
-		void insert_before(node_header* pos, node_header* n) noexcept {
+		void insert_before(node* pos, node* n) noexcept {
 			n->next = pos;
 			n->prev = pos->prev;
 			pos->prev->next = n;
@@ -184,7 +192,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 		}
 
 	private:
-		node_header root_;
+		node root_;
 		size_type size_ = 0u;
 	};
 

@@ -491,4 +491,65 @@ VKTL_EXPORT_ namespace vktl::detail {
 		}
 	} subres{};
 
+
+	struct default_buffer_access : range<VK_ VkDeviceSize> {
+		using range_type = range<VK_ VkDeviceSize>;
+
+		uint16_t index;
+		VK_ VkBufferCreateFlags flags;
+		VK_ VkBufferUsageFlags usage;
+		VK_ VkPipelineStageFlags stage;
+		VK_ VkAccessFlags access;
+		VK_ VkDependencyFlags dependency;
+
+		constexpr bool operator==(default_buffer_access const& other) const noexcept {
+			return access == other.access;
+		}
+
+		constexpr auto& operator|=(default_buffer_access const& other) noexcept {
+			if (&other != this) {
+				flags |= other.flags; usage |= other.usage;
+				stage |= other.stage;  access |= other.access;
+				dependency |= other.dependency;
+			}
+			return *this;
+		}
+	};
+
+	struct default_image_access : VK_ VkImageSubresourceRange {
+		using range_type = VK_ VkImageSubresourceRange;
+		// uint32_t width;
+		// uint32_t height;
+		// uint16_t depth;
+		uint16_t index;
+		VK_ VkImageCreateFlags flags;
+		VK_ VkImageUsageFlags usage;
+		VK_ VkImageLayout layout; // recommanded layout.
+		VK_ VkPipelineStageFlags stage;
+		VK_ VkAccessFlags access;
+		VK_ VkDependencyFlags dependency;
+
+		constexpr bool operator==(default_image_access const& other) const noexcept {
+			return access == other.access;
+		}
+
+		constexpr auto& operator|=(default_image_access const& other) noexcept {
+			if (&other != this) {
+				if (layout == VK_ VK_IMAGE_LAYOUT_UNDEFINED) {
+					layout = other.layout;
+				}
+				else if (other.layout == VK_ VK_IMAGE_LAYOUT_GENERAL || layout != other.layout) {
+					layout = VK_ VK_IMAGE_LAYOUT_GENERAL;
+				}
+
+				flags |= other.flags; usage |= other.usage;
+				stage |= other.stage; access |= other.access;
+				dependency |= other.dependency;
+			}
+			return *this;
+		}
+	};
+
+	template<typename N, typename T>
+	constexpr auto handle_from() noexcept { return N::template parent<T>()->handle(); }
 }

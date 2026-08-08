@@ -1,7 +1,37 @@
 #pragma once
 
-VKTL_EXPORT_ namespace vktl::detail {
+VKTL_EXPORT_ namespace vktl::vptr {
 
+	template<typename C>
+	struct descriptor : C {
+
+	};
+
+	template<typename C, typename H>
+	struct resource_view : handle_owner<C, H> {
+		using handle_type = H;
+
+	protected:
+		using base = handle_owner<C, H>;
+
+		template<typename T>
+		void rebind() {
+			base::template rebind<T>();
+		}
+		template<typename O>
+		void rebind(resource_view<O, H> const& other) {
+			base::rebind(other);
+			set_handle_ = other.set_handle_;
+		}
+
+	private:
+		detail::box<descriptor>(*get_handle_)(void const*);
+		void(*set_handle_)(void*, box<descriptor>);
+	};
+}
+
+VKTL_EXPORT_ namespace vktl::detail {
+	
 	template<typename N>
 	struct m<buffer, N> : N {
 		using base = N;
@@ -14,6 +44,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 		void init() {
 			if (!handle_) {
+				::std::lock_guard _{ N::get_lock() };
 				N::init();
 				VK_ vkCreateBuffer(handle_from<N, device>(), &info, N::allocator(), &handle_)
 					| popup{ "[BUFFER] Create buffer failure." };
@@ -22,9 +53,14 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 		void reset() {
 			if (handle_) {
+				for (auto c : childs_) { c.reset(); }
+				::std::lock_guard _{ N::get_lock() };
+				childs_.clear();
 				VK_ vkDestroyBuffer(handle_from<N, device>(), handle_, N::allocator());
 			}
 		}
+
+		auto handle() const noexcept { return handle_.value; }
 
 	protected:
 		VK_ VkBufferCreateInfo info;
@@ -32,6 +68,8 @@ VKTL_EXPORT_ namespace vktl::detail {
 	private:
 		reset_if_copy<VK_ VkBuffer> handle_;
 		access_list<default_buffer_access> access_;
+		vector<type_box<quote<vptr::reusable>, 
+			bind_back<vptr::resource_view, VK_ VkBufferView>>> childs_;
 	};
 
 
@@ -58,15 +96,15 @@ VKTL_EXPORT_ namespace vktl::detail {
 			}
 		}
 
-		auto handle() const noexcept {
-			return handle_.value;
-		}
+		auto handle() const noexcept { return handle_.value; }
 
 	protected:
 		VK_ VkBufferViewCreateInfo info;
 
 	private:
 		reset_if_copy<VK_ VkBufferView> handle_;
+		vector<type_box<quote<vptr::reusable>,
+			bind_back<vptr::descriptor, VK_ VkBufferView>>> childs_;
 	};
 
 

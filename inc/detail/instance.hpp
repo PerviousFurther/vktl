@@ -20,7 +20,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 			append(layers, layer);
 		}
 		void append_extension(const char* extension) {
-			assert(extension); // no need to append layer.
+			assert(extension); // no need to append extension.
 			append(extensions, extension);
 		}
 
@@ -29,15 +29,9 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 	private:
 		static void append(auto& vec, auto value) {
-			for (auto it = vec.begin(); it != vec.end(); ) {
-				int result = ::std::strcmp(value, *it);
-				if (result < 0) { it++; }
-				else if (result == 0u) { break; }
-				else if (result > 0u) {
-					vec.insert(it, value);
-					break;
-				}
-			}
+			auto it = ::std::ranges::upper_bound(vec, value, {},
+				[](auto elem) { return::std::string_view{ elem }; });
+			vec.insert(it, value);
 		}
 	};
 
@@ -86,11 +80,27 @@ VKTL_EXPORT_ namespace vktl::detail {
 		}
 
 		uint32_t max_api_version() noexcept {
-			uint32_t version; VK_ vkEnumerateInstanceVersion(&version);
+			uint32_t version; 
+			VK_ vkEnumerateInstanceVersion(&version)
+				| popup{"[INSTANCE] Vulkan driver or loader is not supported on this system."};
 			return version;
 		}
 
-		void api_version(uint32_t value) noexcept { app_.apiVersion = value; }
+		void api_version_minor(uint32_t minor) noexcept { 
+		#if defined(VK_API_VERSION_1_4)
+		# define MAX_API_VERSION VK_API_VERSION_1_4
+		#elif defined(VK_API_VERSION_1_3)
+		# define MAX_API_VERSION VK_API_VERSION_1_3
+		#elif defined(VK_API_VERSION_1_2)
+		# define MAX_API_VERSION VK_API_VERSION_1_2
+		#elif defined(VK_API_VERSION_1_1)
+		# define MAX_API_VERSION VK_API_VERSION_1_1
+		#else
+		# define MAX_API_VERSION VK_API_VERSION_1_0
+		#endif
+			app_.apiVersion = ::std::clamp(VK_MAKE_API_VERSION(0, 1, value, 0), VK_API_VERSION_1_0, max_api_version());
+		}
+		uint32_t api_version_minor() noexcept { return VK_API_VERSION_MINOR(app_.apiVersion); }
 
 		auto handle() const noexcept { return instance_; }
 
@@ -109,9 +119,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 	struct m<debug_utils, N> : N {
 		constexpr m(debug_utils const& utils, auto&&...others)
 			: N{ forward_(others)... }
-			, debug_messanger{
-				.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT,
-			} {
+			, debug_messanger{ .sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT, } {
 			N::append_extension(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
 		}
 

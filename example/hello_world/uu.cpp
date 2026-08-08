@@ -1,10 +1,22 @@
 #include "vktl.hpp"
-#include "uu.h"
 
 void* create_win();
 bool is_running(void* window);
 
+struct u {
+	double first;
+	int second;
+};
+// ptr is from (some object of u).second
+double* foo(int* ptr) {
+	return reinterpret_cast<double*>(reinterpret_cast<char*>(ptr) - offsetof(u, second) + offsetof(u, first));
+}
+
+
+
 int main() {
+
+
 	using namespace vktl;
 	auto hwnd = create_win();
 

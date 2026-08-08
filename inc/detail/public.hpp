@@ -1,10 +1,12 @@
 #pragma once
 
-#if VKTL_HAVE_STD_
-#   include <span>
-#   include <string_view>
-#   include <tuple>
-#endif
+VKTL_EXPORT_ namespace vktl {
+	using size_t = ::std::size_t;
+	using uint64_t = ::std::uint64_t;
+	using uint32_t = ::std::uint32_t;
+	using uint16_t = ::std::uint16_t;
+	using uint8_t = ::std::uint8_t;
+}
 
 VKTL_EXPORT_ namespace vktl::detail {
 	inline constexpr struct invalid_ {
@@ -21,47 +23,215 @@ VKTL_EXPORT_ namespace vktl::detail {
 		friend constexpr bool operator==(const invalid_, T left) noexcept { return left == value<T>; }
 		template<::std::unsigned_integral T>
 		friend constexpr bool operator!=(const invalid_, T left) noexcept { return left != value<T>; }
+
 	} invalid{}, maximum{};
 
+	template<template<typename>typename...Ts>
+	struct compose {
+		template<typename C>
+		using apply = C;
+	};
+	template<template<typename>typename First>
+	struct compose<First> {
+		template<typename C>
+		using apply = First<C>;
+	};
+	template<template<typename>typename First, template<typename>typename Second>
+	struct compose<First, Second> {
+		template<typename C>
+		using apply = First<Second<C>>;
+	};
+	template<template<typename>typename First, template<typename>typename Second, template<typename>typename...Ts>
+	struct compose<First, Second, Ts...> : compose<compose<First, Second>::template apply, Ts...> {};
 
+	struct vptr_base {
+	protected:
+		template<typename>
+		static constexpr void rebind() noexcept {}
+		static constexpr void rebind(auto const&) noexcept {}
 
-}
+	protected:
+		void* pthis = nullptr;
+	};
 
-// BEFORE EDIT: 
-// 1. extensions of `xxx` should inside namspace `xxx_extensions`
-VKTL_EXPORT_ namespace vktl {
-	using size_t = ::std::size_t;
-	using uint64_t = ::std::uint64_t;
-	using uint32_t = ::std::uint32_t;
-	using uint16_t = ::std::uint16_t;
-	using uint8_t = ::std::uint8_t;
+	// lefter template at topper of inheritance chain.
+	template<template<typename>typename...VPtrs>
+	struct box : compose<VPtrs...>::template apply<vptr_base> {
+		using base = compose<VPtrs...>::template apply<vptr_base>;
 
-	template<typename T>
-	using span = ::std::span<T>;
+		template<typename T>
+		constexpr box(::std::in_place_t, T& ptr)
+			: ptr_{ &ptr } {
+			base::template rebind<T>();
+		}
 
-	template<typename T>
-	using cspan = span<::std::add_const_t<T>>;
+		template<typename T>
+		constexpr box(T& ptr)
+			: ptr_{ &ptr } {
+			rebind<T>();
+		}
 
-	struct byte_view : span<::std::byte> {
-		using base = span<::std::byte>;
+		template<typename T>
+		constexpr box(T* ptr)
+			: ptr_{ ptr } {
+			rebind<T>();
+		}
+
+		constexpr box(box const& other)
+			: base{ static_cast<base const&>(other) }
+			, ptr_{ other.ptr_ }
+			, release_{ other.release_ }
+			, add_ref_{ other.add_ref_ } {
+			assert(!(add_ref_ ^ release_));
+			if (add_ref_ && ptr_) {
+				add_ref_(ptr_);
+			}
+		}
+		constexpr box& operator=(box const& other) {
+			if (&other != this) {
+				assert(!(add_ref_ ^ release_));
+				reset();
+
+				add_ref_ = other.add_ref_;
+				release_ = other.release_;
+
+				assert(!(add_ref_ ^ release_));
+
+				static_cast<base&>(*this) = other;
+				if (ptr_ == other.ptr_ && add_ref_) {
+					add_ref_(ptr_);
+				}
+			}
+			return *this;
+		}
+
+		constexpr box(box&& other) noexcept
+			: base{ static_cast<base&&>(other) }
+			, add_ref_{ ::std::exchange(other.add_ref_, nullptr) }
+			, release_{ ::std::exchange(other.release_, nullptr) } {
+			this->pthis = ::std::exchange(other.pthis, nullptr);
+		}
+
+		constexpr box& operator=(box&& other) noexcept {
+			if (this != &other) {
+				reset();
+				static_cast<base&>(*this) = static_cast<base&&>(other);
+				this->pthis = ::std::exchange(other.pthis, nullptr);
+				add_ref_ = ::std::exchange(other.add_ref_, nullptr);
+				release_ = ::std::exchange(other.release_, nullptr);
+			}
+			return *this;
+		}
+
+		~box() { reset(); }
+
+		bool shared_() const noexcept { return add_ref_; }
+		bool unique() const noexcept { return !add_ref_ && release_; }
+		bool view() const noexcept { return !add_ref_ && !release_; }
+
+		void reset() noexcept {
+			if (release_) { ::std::exchange(release_, nullptr)(::std::exchange(ptr_, nullptr)); }
+			add_ref_ = nullptr;
+		}
+
+		void* get() const noexcept { return base::pthis; }
+
+	private:
+		template<typename T>
+		void rebind() {
+			base::template rebind<T>();
+			// TODO: maybe launder, but whatever.
+			if constexpr (requires (T & v) {
+				{ v.add_ref() } -> ::std::same_as<uint32_t>;
+				{ v.release() } -> ::std::same_as<uint32_t>;
+			}) {
+				add_ref_ = [](void* ptr) -> uint32_t { return static_cast<T*>(ptr)->add_ref(); };
+				release_ = [](void* ptr) -> uint32_t { return static_cast<T*>(ptr)->release(); };
+			}
+			else {
+				release_ = [](void* ptr) -> uint32_t { delete static_cast<T*>(ptr); return 0u; };
+			}
+		}
+
+	private:
+		uint32_t(*add_ref_)(void*) = nullptr;
+		uint32_t(*release_)(void*) = nullptr;
+	};
+
+	// lefter type at topper of inheritance chain.
+	template<typename...Ts>
+	using type_box = box<Ts::template apply...>;
+
+	struct byte_view : span<const::std::byte> {
+		using base = span<const::std::byte>;
 
 		byte_view() = default;
-		byte_view(void* bytes, ::std::size_t size)
-			: base{ static_cast<::std::byte*>(bytes), size }
+		byte_view(void const* bytes, ::std::size_t size)
+			: base{ static_cast<::std::byte const*>(bytes), size }
 		{
 		}
 		template<typename T>
-		byte_view(T* bytes, ::std::size_t count)
-			: base{ reinterpret_cast<::std::byte*>(bytes), count * sizeof(T) }
+		byte_view(T const* bytes, ::std::size_t count)
+			: base{ reinterpret_cast<::std::byte const*>(bytes), count * sizeof(T) }
 		{
 		}
 		template<typename T>
-		byte_view(::std::span<T> bytes)
-			: base{ reinterpret_cast<::std::byte*>(bytes.data()), bytes.size() * sizeof(T) }
+		byte_view(::std::span<T const> bytes)
+			: base{ reinterpret_cast<::std::byte const*>(bytes.data()), bytes.size() * sizeof(T) }
 		{
 		}
 	};
+}
 
+VKTL_EXPORT_ namespace vktl::vptr {
+	template<typename C>
+	struct handle_allocator : C {
+
+		void* allocate(size_t size, size_t alignment) {
+			assert(allocate_); return allocate_(C::get_this(), size, alignment);
+		}
+		void reallocable() {
+
+		}
+		void* reallocate(void* ptr, size_t size, size_t alignment = alignof(max_align_t)) {
+			assert(reallocate_); return reallocate_(C::get_this(), ptr, size, alignment);
+		}
+
+		void free(void* ptr) noexcept {
+			assert(free_); if (ptr) { free_(C::get_this(), ptr); }
+		}
+
+	protected:
+		template<typename T>
+		void rebind() noexcept {
+			allocate_ = [](void* ptr, size_t size, size_t alignment) -> void* {
+				return static_cast<T*>(ptr)->allocate(size, alignment);
+				};
+			if constexpr (requires(T & value, void* ptr, size_t size, size_t alignment)
+			{ { value.reallocate(ptr, size, alignment) } -> ::std::convertible_to<void*>;
+			}) {
+				reallocate_ = [](void* ptr, void* re, size_t size, size_t alignment) -> void* {
+					return static_cast<T*>(ptr)->reallocate(re, size, alignment);
+					};
+			}
+			free_ = [](void* ptr, void* p) { static_cast<T*>(ptr)->free(p); };
+		}
+
+	private:
+		void* (*allocate_)(void*, size_t, size_t);
+		void* (*reallocate_)(void*, void*, size_t, size_t);
+		void(*free_)(void*, void*);
+	};
+}
+
+
+VKTL_EXPORT_ namespace vktl {
+	template<typename T>
+	using span = ::std::span<T>;
+	template<typename T>
+	using cspan = span<::std::add_const_t<T>>;
+
+	using detail::byte_view;
 	using detail::invalid;
 	using detail::maximum;
 
@@ -73,18 +243,8 @@ VKTL_EXPORT_ namespace vktl {
 	namespace extensions {
 		// use for internal api's handle allocation.
 		// not for gpu memory allocation.
-		struct allocator {
-			struct interface {
-				virtual ~interface() = default;
-
-				virtual void* allocate(size_t size, size_t alignment) = 0;
-				virtual void* reallocate(void* original, size_t size, size_t alignment) = 0;
-				virtual void free(void* memory) = 0;
-
-				virtual void internal_allocate(size_t size, const char*) {}
-				virtual void internal_free(size_t size, const char*) {}
-			} *view{ nullptr } // take as view.
-			, * move{ nullptr }; // take ownership of the allocator.
+		struct allocate_from { 
+			detail::box<detail::default_handle_allocator_vptr> allocator; 
 		};
 
 		// some of the object must contain at least one of these object.
@@ -146,8 +306,10 @@ VKTL_EXPORT_ namespace vktl {
 		inline constexpr struct glsl_ {} glsl {};
 		inline constexpr struct hlsl_ {} hlsl {};
 		struct optimize { uint8_t level; };
+		inline constexpr struct contain_debug_info_ {} contain_debug_info {};
+		inline constexpr struct customize_include_ {} customize_include {};
 	}
-	typedef struct shader_handle_tag {} *shader_handle;
+	typedef struct shader_handle_tag *shader_handle;
 	// compiler's should select atleast glsl or dxc.
 	inline constexpr struct compiler_ {} compiler;
 
@@ -176,7 +338,7 @@ VKTL_EXPORT_ namespace vktl {
 	}
 	namespace execution_extensions {
 		using extensions::debug_named;
-		using extensions::allocator;
+		using extensions::allocate_from;
 	}
 	// execution is thread related.
 	// each queue will represent a thread.
@@ -356,17 +518,34 @@ VKTL_EXPORT_ namespace vktl {
 		uint32_t height = maximum;
 	};
 
-	namespace memory_allocator_extensions {
-		using extensions::allocator;
+	// allocator_extensions is for memory allocator and descriptor allocator.
+	namespace allocator_extensions {
+		using extensions::allocate_from;
 		using extensions::debug_named;
+		// allocate strategy.
+		inline constexpr struct arena_ {} arena{}, linear{};
+		inline constexpr struct ringed_ {} ringed{};
+	}
+	namespace memory_allocator_extensions {
+		using namespace allocator_extensions;
 
 		inline constexpr struct buddy_ {} buddy{};
 		inline constexpr struct best_fit_ {} best_fit{};
-		inline constexpr struct ringed_ {} ringed{};
-		// inline constexpr struct 
-		inline constexpr struct arena_ {} arena{}, linear{};
+		
+		inline constexpr struct budget_ {} budget {};
+		inline constexpr struct dedicated_ {} dedicated {};
 	}
 	inline constexpr struct memory_allocator_ {} memory_allocator{};
+	typedef struct memory_handle_tag *memory_handle;
+
+	namespace descriptor_allocator_extensions {
+		using namespace allocator_extensions;
+
+		inline constexpr struct descriptor_buffer {} descriptor_buffer {};
+		inline constexpr struct descriptor_heap {} descriptor_heap {};
+	}
+	inline constexpr struct descriptor_allocator_ {} descriptor_allocator {};
+	typedef struct descriptor_handle_tag* descriptor_handle;
 
 	namespace resource_usage {
 		using resource_attrs::type;
@@ -446,7 +625,7 @@ VKTL_EXPORT_ namespace vktl {
 
 	namespace image_view_extensions {
 		using namespace resource_view_extensions;
-		using extensions::allocator;
+		using extensions::allocate_from;
 		using extensions::debug_named;
 		using image_format::format_color;
 		using image_format::format_depth;
@@ -595,7 +774,7 @@ VKTL_EXPORT_ namespace vktl {
 	}
 
 	namespace pass_extensions {
-		using extensions::allocator;
+		using extensions::allocate_from;
 		using extensions::debug_named;
 		using extensions::graphics;
 		using extensions::compute;
