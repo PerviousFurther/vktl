@@ -1,5 +1,9 @@
 #pragma once
 
+// Interface style: `object` builds fluent expressions into a compile-time
+// chain of small mixins, with parent objects retained by explicit references.
+// Implementation: `m<Tag, Next>` is the extension point; unknown aggregate
+// descriptors are transparent layers so data-only declarations compose safely.
 
 VKTL_EXPORT_ namespace vktl::detail {
 

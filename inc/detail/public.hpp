@@ -1,5 +1,10 @@
 #pragma once
 
+// Interface style: lightweight aggregate descriptors and constexpr tags form
+// fluent `object | descriptor | extension` expressions throughout VKTL.
+// Implementation: declarations stay Vulkan-free where practical; detail
+// mixins consume these values later and retain all runtime ownership.
+
 // --------------PUBLIC SCOPE---------------
 // this scope should not contain vulkan objects.
 // it should consider as RHI like interfaces.
@@ -107,6 +112,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 	template<typename...VPtrs>
 	struct box : apply_compose<vptr_base, VPtrs...> {
 		using base = apply_compose<vptr_base, VPtrs...>;
+		constexpr box() noexcept = default;
 
 		template<typename T>
 		constexpr box(T* pthis) {
@@ -829,6 +835,17 @@ VKTL_EXPORT_ namespace vktl {
 		struct frame_global {};
 	}
 	struct image_view {};
+
+	struct uniform_buffer {
+		uint32_t index;
+		uint32_t set;
+		uint32_t binding;
+	};
+
+	struct attachment {
+		uint16_t index;
+		uint16_t attribute = 0x41u;
+	};
 	
 	namespace descriptor_set_extensions {
 		using extensions::debug_named;

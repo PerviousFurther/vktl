@@ -1,5 +1,10 @@
 #pragma once
 
+// Interface style: buffer and buffer-view descriptors compose resource
+// ownership, memory binding, mapping, and descriptor-view behavior.
+// Implementation: Vulkan operations are selected through compact traits while
+// the generic resource layers provide frame and allocator integration.
+
 VKTL_EXPORT_ namespace vktl::vptr {
 }
 
@@ -10,7 +15,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 		static constexpr VK_ VkObjectType object_type = VK_ VK_OBJECT_TYPE_BUFFER;
 
 		using type = buffer;
-		using view = buffer_view;
+		using view = buffer_view_;
 		using handle_type = VK_ VkBuffer;
 		using create_info_type = VK_ VkBufferCreateInfo;
 		using create_flags_bits_type = VK_ VkBufferCreateFlagBits;
@@ -43,10 +48,10 @@ VKTL_EXPORT_ namespace vktl::detail {
 	struct trait<VK_ VkBuffer> : trait<buffer> {};
 
 	template<>
-	struct trait<buffer_view> {
+	struct trait<buffer_view_> {
 		static constexpr VK_ VkObjectType object_type = VK_ VK_OBJECT_TYPE_BUFFER_VIEW;
 
-		using type = buffer_view;
+		using type = buffer_view_;
 		using host = buffer;
 		using handle_type = VK_ VkBufferView;
 		using create_info_type = VK_ VkBufferViewCreateInfo;
@@ -58,7 +63,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 		static constexpr auto destroy = &VK_ vkDestroyBufferView;
 	};
 	template<>
-	struct trait<VK_ VkBufferView> : trait<buffer_view> {};
+	struct trait<VK_ VkBufferView> : trait<buffer_view_> {};
 
 
 	template<typename N>
@@ -68,6 +73,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 		constexpr m(buffer buffer, auto&&...others)
 			: base{ forward_(others)... } {
 			info.sType = VK_ VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+			info.size = buffer.size;
 		}
 
 		~m() { reset(); }
@@ -102,8 +108,8 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 
 	template<typename N>
-	struct m<buffer_view, N> : N {
-		constexpr m(buffer_view buffer_view, auto&&...others)
+	struct m<buffer_view_, N> : N {
+		constexpr m(buffer_view_ buffer_view, auto&&...others)
 			: N{ forward_(others)... }
 		{
 		}

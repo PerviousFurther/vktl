@@ -1,5 +1,10 @@
 #pragma once
 
+// Interface style: bind-set objects accept typed resource views and expose a
+// frame-aware descriptor-set handle to passes and command recording.
+// Implementation: view behavior is erased by a handwritten multi-function
+// vptr table, while descriptor writes remain grouped by binding.
+
 namespace vktl::detail {
 	struct bind_descriptor_set {
 		void* parent; // maybe remove.
@@ -9,7 +14,7 @@ namespace vktl::detail {
 	};
 
 	template<>
-	struct trait<descriptor_set_> {
+	struct trait<bind_set_> {
 		using handle_type = VK_ VkDescriptorSet;
 		// using create_info_type = VK_ VkDescriptorSetCreateINf
 	};
@@ -36,7 +41,7 @@ namespace vktl::vptr {
 
 		template<typename C>
 		struct apply : base<C> {
-			using base = base<C>;
+			using base_type = base<C>;
 
 			template<typename T>
 			void bind() noexcept {
@@ -54,7 +59,7 @@ namespace vktl::vptr {
 						else {
 							return nullptr;
 						}
-					}
+					},
 					.upload_access_ = [](void* ptr)  {
 						static_cast<T*>(ptr)->upload_access();
 					}
@@ -133,13 +138,17 @@ namespace vktl::detail {
 
 	template<typename N>
 	struct m<bind_set_, N> : basic_frame_related<N> {
+		using base = basic_frame_related<N>;
+
 		constexpr m(bind_set_, auto&&...others)
-			: N {forward_(others)...}
+			: base{ forward_(others)... }
 		{}
 
 		default_descriptor_set_layout const& layout() const noexcept {
 			return layouts_;
 		}
+
+		void bind(uint32_t, auto&) noexcept {}
 		
 		void reset() {
 			if (bind_.handle) {
@@ -197,9 +206,8 @@ namespace vktl::detail {
 		box_list<T> childs;
 	};
 
-	// N usually is other like `allow_image_` or `allow_tensor_`.
 	template<typename N>
-		requires(object_of<N, descriptor_set_>)
+		requires(object_of<N, bind_set_>)
 	struct m<allow_buffer_, N> : N {
 		using base = N;
 
@@ -207,18 +215,17 @@ namespace vktl::detail {
 			: N{forward_(others)...} 
 		{}
 
-		void reserve(object_of<buffer_view> auto& buffer, set_point point) {
+		void reserve(uint32_t index, object_of<buffer_view_> auto& buffer) {
 			descriptor_scope scope = N::layouts_.add(VK_ VkDescriptorSetLayoutBinding{ point.binding, buffer.descriptor_type(), 1u });
 			auto& childs = childs_[scope.index].childs;
 		}
 
-		void update(object_of<buffer_view> auto& buffer, set_point point) {
+		void update(uint32_t index, object_of<buffer_view_> auto& buffer) {
 
 		}
 
-		void bind(object_of<buffer_view> auto& buffer, set_point bind) {
+		void bind(uint32_t object_of<buffer_view_> auto& buffer) {
 			reserve(buffer, bind);
-			childs.insert(childs.begin() + scope.element, buffer);
 		}
 
 		void bind(bind_descriptors bind) {
@@ -227,7 +234,7 @@ namespace vktl::detail {
 		}
 
 	private:
-		vector<default_set_bind_point<vptr::view_need_descriptor<trait<buffer_view>>>> childs_;
+		vector<default_set_bind_point<vptr::view_need_descriptor<trait<buffer_view_>>>> childs_;
 	};
 
 }

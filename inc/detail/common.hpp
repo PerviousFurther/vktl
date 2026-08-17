@@ -1,5 +1,10 @@
 #pragma once
 
+// Interface style: reusable vptr capabilities and parent-link mixins connect
+// independently composed objects without virtual inheritance.
+// Implementation: each vptr stores explicit function pointers, while `from`
+// owns only stable parent addresses and forwards initialization deliberately.
+
 VKTL_EXPORT_ namespace vktl::vptr {
 	using detail::box;
 
@@ -341,7 +346,8 @@ VKTL_EXPORT_ namespace vktl::detail {
 		using parents = ts<Ts...>;
 
 		constexpr m(from<Ts...> const& value, auto&&...others)
-			: N{ forward_(others)... } {
+			: N{ forward_(others)... }
+			, parents_{ static_cast<typename from<Ts...>::base const&>(value) } {
 		}
 
 		template<typename...Qs>

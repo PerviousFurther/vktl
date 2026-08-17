@@ -1,5 +1,10 @@
 #pragma once
 
+// Interface style: pipeline descriptors compose graphics/compute state one
+// focused layer at a time, including subpass and shader declarations.
+// Implementation: each layer mutates the owning pass's stable create-info
+// storage so Vulkan pointers remain valid until pipeline creation.
+
 VKTL_EXPORT_ namespace vktl::detail {
 
 #pragma region NOBODY_LIKE_GRAPHICS_PIPELINE
@@ -131,8 +136,8 @@ VKTL_EXPORT_ namespace vktl::detail {
 #pragma endregion
 
 	template<typename N>
-	struct c<pipe_, N> : N {
-		constexpr c(pipe_, auto&&...others)
+	struct m<pipe_, N> : N {
+		constexpr m(pipe_, auto&&...others)
 			: N{ forward_(others)... } {
 			if constexpr (N::template query<graphics_>()) {
 				pipe_index_ = N::append(VK_ VkGraphicsPipelineCreateInfo{
@@ -168,8 +173,8 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 	template<typename N>
 		requires(N::template query<render_pass_>())
-	struct c<subpass, N> : N {
-		constexpr c(subpass subpass, auto&&...others)
+	struct m<subpass, N> : N {
+		constexpr m(subpass subpass, auto&&...others)
 			: N{ forward_(others)... }
 			, subpass_{ subpass.index } {
 		}

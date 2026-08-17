@@ -1,5 +1,10 @@
 #pragma once
 
+// Interface style: compact containers provide stable-address heterogeneous
+// storage and structure-of-arrays helpers used by Vulkan create-info builders.
+// Implementation: poly_list nodes carry an explicit deleter and intrusive
+// links; typed APIs preserve ownership without virtual functions.
+
 VKTL_EXPORT_ namespace vktl::detail {
 
 	// currently standard c++ is not support *provenance* object.
@@ -99,8 +104,9 @@ VKTL_EXPORT_ namespace vktl::detail {
 		template<::std::derived_from<node> T, typename... Args>
 		T& emplace(const_iterator where, Args&&... args) requires(::std::constructible_from<T, Args&&...>) {
 			auto* obj = new T(static_cast<Args&&>(args)...);
-			insert_before(where.ptr_, obj);
-			obj->deleter_ = [](void const* ptr) noexcept { delete static_cast<T const*>(ptr); };
+			auto* node_ptr = static_cast<node*>(obj);
+			insert_before(const_cast<node*>(where.ptr_), node_ptr);
+			node_ptr->deleter = [](node const* ptr) noexcept { delete static_cast<T const*>(ptr); };
 			return *obj;
 		}
 

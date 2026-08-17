@@ -1,35 +1,9 @@
 #pragma once
 
-/* Agent Specification.
-
-### Overview & System Purpose
-- VKTL's resource part, contains allocator and basic resources's operation.
-
-### Modifying Allocator Strategies
-- Every sub-allocator page class must inherit from `page_base` (which contains `is_tiling`, `offset`, `total_size`).
-- Must define `static constexpr uint32_t allocation_type`.
-- Must provide standard interface methods:
-  - `size_t allocate[_no_grow](size_t size, size_t alignment, size_t min_block_size)`
-  - `void free(size_t offset, size_t size, size_t min_block_size)`
-  - `bool has_space(size_t size, size_t alignment, size_t min_block_size) const`
-
-### Adding a New Mixin Extension
-When creating a new extension mixin (e.g., `m<my_ext_, N>`):
-```cpp
-// 1. must make a comment of what N usually is.
-template<typename N>
-struct m<my_ext_, N> : N {
-	constexpr m(my_ext_, auto&&...others)
-		: N{ forward_(others)... } {
-		// 2. Append Vulkan extensions to device/instance if required
-	}
-
-protected:
-	// 3. Override `get_state`, `each`, or `allocate` if necessary,
-	//    always forwarding unhandled steps to `N::method(...)`.
-};
-
-*/
+// Interface style: resource objects gain allocation policies by composing
+// focused mixins for budget, dedicated, buddy, and mapping behavior.
+// Implementation: allocator/resource coupling uses handwritten vptr tables;
+// concrete page strategies share small allocation primitives and state.
 
 VKTL_EXPORT_ namespace vktl::detail {
 	// tag constraint for resource.
@@ -147,45 +121,6 @@ VKTL_EXPORT_ namespace vktl::vptr {
 		vfn<span<memory_flags_t const>() const> memories_flags_;
 		vfn<bool() const> is_tiling_;
 	};
-
-	template<typename Trait>
-	struct bindable_resource {
-		using handle_type = typename Trait::handle_type;
-		using access_list = detail::access_list<typename Trait::access>;
-
-		template<typename C>
-		using base = apply_compose<C, handle_owner<detail::locked<handle_type>>>;
-
-		template<typename C>
-		struct apply : base<C> {
-			using base = base<C>;
-
-			template<typename T>
-			void rebind() {
-				vptr_ = {
-					.access_ = [](void* ptr) -> access_list& {
-						return static_cast<T*>(ptr)->access();
-					},
-					.const_access_ = [](void const* ptr) -> access_list const& {
-						return static_cast<T const*>(ptr)->access();
-					}
-				};
-			}
-
-			access_list& access() noexcept {
-				return vptr_.const_access_(C::get_this());
-			}
-			access_list const& access() const noexcept {
-				return vptr_.const_access_(C::get_this());
-			}
-
-		private:
-			bindable_resource vptr_;
-		};
-
-		vfn<access_list& ()> access_;
-		vfn<access_list const& () const> const_access_;
-	};
 }
 
 VKTL_EXPORT_ namespace vktl::detail {
@@ -233,15 +168,6 @@ VKTL_EXPORT_ namespace vktl::detail {
 #endif
 		inline VK_ VkMemoryRequirements const& requirement(VK_ VkMemoryRequirements const& reqs) {
 			return reqs;
-		}
-
-#if defined(VK_KHR_get_physical_device_properties2)
-		inline VK_ VkPhysicalDeviceMemoryProperties const& properties(VK_ VkPhysicalDeviceMemoryProperties2KHR const& props) {
-			return props.memoryProperties;
-		}
-#endif
-		inline VK_ VkPhysicalDeviceMemoryProperties const& proerties(VK_ VkPhysicalDeviceMemoryProperties const& value) {
-			return value;
 		}
 	}
 
@@ -318,7 +244,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 		void reset() {
 			auto hdv = handle_of<device>(this);
 			auto _ = locker_of(this);
-			// maybe add notiftier, but validation layer will do reference checkage.
+			// maybe add notiftier, but validation layer will do reference checkage, lazy to implment.
 			for (default_memory& memory : this->memories) {
 				assert(memory.allocation_type != memory::dedicated_allocation); // test, normally, resource should already release when reset.
 				VK_ vkFreeMemory(hdv, memory.handle, N::allocator());
@@ -340,23 +266,22 @@ VKTL_EXPORT_ namespace vktl::detail {
 			{
 				VK_ vkGetPhysicalDeviceMemoryProperties(handle, &state.props);
 			}
+			
 #if defined(VK_KHR_get_physical_device_properties2)
 			if (plimits) {
-				auto* p2 = static_cast<VK_ VkPhysicalDeviceProperties2KHR*>(plimits);
-				p2->sType = VK_ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2_KHR;
-				VK_ vkGetPhysicalDeviceProperties2KHR(handle, p2);
-				state.limits = p2->properties.limits;
-			}
-			else {
+				VK_ VkPhysicalDeviceProperties2KHR infos{
+					.sType = VK_ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2_KHR,
+					.pNext = plimits,
+				};
+				VK_ vkGetPhysicalDeviceProperties2KHR(handle, &infos);
+				state.limits = infos.properties.limits;
+			} else 
+#endif
+			{
 				VK_ VkPhysicalDeviceProperties devProps{};
 				VK_ vkGetPhysicalDeviceProperties(handle, &devProps);
 				state.limits = devProps.limits;
 			}
-#else
-			VK_ VkPhysicalDeviceProperties devProps{};
-			VK_ vkGetPhysicalDeviceProperties(handle, &devProps);
-			state.limits = devProps.limits;
-#endif
 			return::std::tuple(::std::move(state));
 		}
 
@@ -1244,8 +1169,14 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 		void init(auto&...resources) { N::init(res_, resources...); }
 
-		void append(object_of<typename trait<Trait>::type> auto& resource) {
+		void append(object_of<typename Trait::type> auto& resource) {
 			res_.push_back(resource);
+		}
+
+		template<typename Resource>
+			requires requires(N& next, Resource& resource) { next.append(resource); }
+		void append(Resource& resource) {
+			N::append(resource);
 		}
 
 	private:
@@ -1287,6 +1218,10 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 		span<memory_flags_t const> memory_flags() const noexcept {
 			return memories_.column<0u>();
+		}
+
+		void bind(bind_memory const& memory) noexcept {
+			bind(memory, this->frame_index());
 		}
 
 		void bind(bind_memory const& memory, uint32_t index) noexcept {
@@ -1337,7 +1272,9 @@ VKTL_EXPORT_ namespace vktl::detail {
 	struct m<mappable_, N> : N {
 		constexpr m(mappable_, auto&&...others)
 			: N{ forward_(others)... } {
-			N::memory_flags = VK_ VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
+			N::memory_flags(memory_flags_t{
+				.property = VK_ VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
+			});
 		}
 
 		void upload(byte_view data, size_t offset = maximum) {
@@ -1359,7 +1296,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 		template<typename T>
 		void upload(::std::initializer_list<T> list, size_t offset = maximum) {
-			upload({ list.begin(), list.end() })
+			upload(byte_view{ list.begin(), list.end() }, offset);
 		}
 
 
@@ -1386,7 +1323,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 				flags |= VK_ VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
 			}
 
-			base.memory_flags = flags;
+			base.memory_flags(flags);
 		}
 	};
 

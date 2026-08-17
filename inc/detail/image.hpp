@@ -145,10 +145,6 @@ VKTL_EXPORT_ namespace vktl::detail {
 			}
 		}
 
-		auto handle() const noexcept {
-			return handle_.value;
-		}
-
 		void upload_access() const noexcept {
 			
 		}
@@ -159,9 +155,6 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 	protected:
 		VK_ VkImageViewCreateInfo info;
-		
-	private:
-		reset_if_copy<VK_ VkImageView> handle_{ VK_NULL_HANDLE };
 	};
 
 

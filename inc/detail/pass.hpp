@@ -1,9 +1,14 @@
 #pragma once
 
+// Interface style: pass and render-pass tags compose pipeline state while
+// exposing small append/bind operations to subsequent mixins.
+// Implementation: graphics state is accumulated in stable vectors and Vulkan
+// handles are owned by the render-pass layer.
+
 VKTL_EXPORT_ namespace vktl::detail {
 	template<typename N>
-	struct c<pass_, N> : N {
-		constexpr c(pass_, auto&&...other)
+	struct m<pass_, N> : N {
+		constexpr m(pass_, auto&&...other)
 			: N{ forward_(other)... }
 		{
 		}
@@ -52,14 +57,15 @@ VKTL_EXPORT_ namespace vktl::detail {
 	};
 
 	template<typename N>
-	struct c<render_pass_, N> : basic_graphics_pass<N> {
+	struct m<render_pass_, N> : basic_graphics_pass<N> {
 		using base = basic_graphics_pass<N>;
+		using base::append;
 
-		c(render_pass_, auto&&...infos)
+		m(render_pass_, auto&&...infos)
 			: base{ forward_(infos)... }
 		{}
 
-		~c() { reset(); }
+		~m() { reset(); }
 
 		void init() {
 			if (!handle_) {
@@ -73,9 +79,11 @@ VKTL_EXPORT_ namespace vktl::detail {
 			}
 		}
 
-		void bind(object_of<image_view>& image, uint32_t attachment) {
+		void bind(object_of<image_view> auto& image, uint32_t attachment) {
 
 		}
+
+		void fill(auto&) noexcept {}
 
 	protected:
 		void append(VK_ VkAttachmentDescription const& attachment) {
@@ -98,9 +106,9 @@ VKTL_EXPORT_ namespace vktl::detail {
 	};
 
 	template<typename N>
-	struct c<graphics_, N> : basic_graphics_pass<N> {
+	struct m<graphics_, N> : basic_graphics_pass<N> {
 		using base = basic_graphics_pass<N>;
-		constexpr c(graphics_, auto&&...infos)
+		constexpr m(graphics_, auto&&...infos)
 			: base{ forward_(infos)... }
 		{
 		}
@@ -108,9 +116,9 @@ VKTL_EXPORT_ namespace vktl::detail {
 	};
 
 	template<typename N>
-	struct c<compute_, N> : N {
+	struct m<compute_, N> : N {
 		using base = N;
-		c(compute_, auto&&...infos)
+		m(compute_, auto&&...infos)
 			: base{ forward_(infos)... }
 		{
 		}

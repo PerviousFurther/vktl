@@ -56,7 +56,7 @@ int main() {
 	object swc
 		= dev | win // swapchain usually have two parents.
 		| swapchain{ .min_frame_count = 2u };
-	object swc_image = swc.image();
+	auto& swc_image = swc;
 
 	// swapchain actually is frame related object, thus,
 	// object `inherit` from
@@ -98,18 +98,16 @@ int main() {
 		| attachment{ .index = 0u,  }; // image index is independent.
 
 	// pass will not bind bind set.
+	// fill operation: fill set layout bindings and other jobs.
 	pass_triangle.fill(set0);
 
-	// equal to 
-	// object uniform_view = uniform | ...;
-	// set0.bind(0, uniform_view);
-
 	// BE NOTICED: set0 is same frame related with uniform view and 
-
 	object uniform_view 
-		= set0.bind(0, uniform
+		= uniform
 		| buffer_view
-		| buffer_view_extensions::buffer_range{ .offset = 0u, .size = sizeof(float) * 16 });
+		| buffer_view_extensions::buffer_range{ .offset = 0u, .size = sizeof(float) * 16 };
+
+	set0.bind(0, uniform_view);
 	set0.bind(0, swc_image);
 
 	object exec 

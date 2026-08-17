@@ -1,5 +1,10 @@
 #pragma once
 
+// Interface style: compose a platform-neutral `window` descriptor with an
+// instance; the resulting object exposes the Vulkan surface and native size.
+// Implementation: each platform specialization owns one VkSurfaceKHR through
+// basic_window and creates/destroys it from a small native create-info object.
+
 #if !defined(VKTL_NO_WINDOW)
 
 VKTL_EXPORT_ namespace vktl::detail {
@@ -125,10 +130,10 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 		void init() {
 			N::init();
-			if (this->handle_) {
+			if (!this->handle_) {
 				assert(info.hwnd && info.hinstance);
 				VK_ vkCreateWin32SurfaceKHR(handle_of<instance>(this),
-					&info.surface, N::allocator(), &surface_.value)
+					&info, N::allocator(), &this->handle_.value)
 					| popup("[WINDOW] Create surface failure.");
 			}
 
@@ -186,7 +191,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 		void init() {
 			N::init();
-			if (this->handle_) {
+			if (!this->handle_) {
 				assert(info.window);
 				VK_ vkCreateAndroidSurfaceKHR(handle_of<instance>(this),
 					&info, N::allocator(), &this->handle_.value)
@@ -256,7 +261,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 		void init() {
 			N::init();
-			if (this->handle_) {
+			if (!this->handle_) {
 				create_surface();
 			}
 		}
@@ -344,7 +349,6 @@ VKTL_EXPORT_ namespace vktl::detail {
 #  endif
 	};
 }
-#endif
 #  elif defined(__APPLE__)
 
 namespace VK_NAMESPACE {
@@ -371,7 +375,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 		void init() {
 			N::init();
-			if (this->handle_) {
+			if (!this->handle_) {
 				assert(info.pLayer);
 				VK_ vkCreateMetalSurfaceEXT(handle_of<instance>(this),
 					&info, N::allocator(), &this->handle_.value)

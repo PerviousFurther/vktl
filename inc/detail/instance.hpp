@@ -1,5 +1,10 @@
 #pragma once
 
+// Interface style: an instance descriptor composes layers, extensions, and
+// diagnostics while exposing loader and physical-device queries to children.
+// Implementation: string lists are version-partitioned and Vulkan creation is
+// deferred until the complete object chain has relocated its pointers.
+
 #if defined(VK_API_VERSION_1_4)
 # define VKTL_MAX_API_VERSION VK_API_VERSION_1_4
 #elif defined(VK_API_VERSION_1_3)
@@ -157,6 +162,19 @@ VKTL_EXPORT_ namespace vktl::detail {
 		uint32_t api_version_minor() noexcept { return VK_API_VERSION_MINOR(app_.apiVersion); }
 
 		auto handle() const noexcept { return instance_; }
+
+		VK_ VkPhysicalDevice physical_device(uint32_t index) const {
+			uint32_t count = 0u;
+			VK_ vkEnumeratePhysicalDevices(instance_, &count, nullptr)
+				| popup{ "[INSTANCE] Enumerate physical devices failure." };
+			if (index >= count) {
+				throw error{ int(VK_ VK_ERROR_INITIALIZATION_FAILED), "[INSTANCE] Physical device index is out of range." };
+			}
+			vector<VK_ VkPhysicalDevice> devices(count);
+			VK_ vkEnumeratePhysicalDevices(instance_, &count, devices.data())
+				| popup{ "[INSTANCE] Enumerate physical devices failure." };
+			return devices[index];
+		}
 
 	protected:
 		VK_ VkInstanceCreateInfo info_;

@@ -1,5 +1,10 @@
 #pragma once
 
+// Interface style: compiler objects collect source or SPIR-V shaders and add
+// language/optimization behavior through composable extension tags.
+// Implementation: heterogeneous shader records live in a polymorphic list;
+// compilation and reflection are deferred until initialization.
+
 #if !defined(VKTL_NO_COMPILER)
 
 //#if !defined(VKTL_NO_PRA_LIB)
@@ -44,7 +49,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 		template<typename Self, typename Parent>
 		explicit default_shader(::std::in_place_type_t<Self> tag, Parent& parent_ref, VK_ VkShaderStageFlagBits stage)
-			: shader_handle_tag(tag), parent(parent_ref), stage(stage) {
+			: shader_handle_tag{}, parent(&parent_ref), stage(stage) {
 		}
 
 		template<typename Parent>
@@ -221,7 +226,9 @@ VKTL_EXPORT_ namespace vktl::detail {
 				{}, ::std::move(entry_point));
 		}
 
-		void init(::std::invocable<default_shader&> auto&& func = &compile::duck_invoker_) {
+		void init() { init(&compile::duck_invoker_); }
+
+		void init(::std::invocable<default_shader&> auto&& func) {
 			::std::lock_guard _{ N::get_lock() };
 			for (default_shader& shader : shaders_) {
 				if (shader.compiled.empty()) {
@@ -313,7 +320,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 			case VK_ VK_SHADER_STAGE_MESH_BIT_EXT:
 				return shaders_.emplace_back<default_mesh_shader>(*this);
 			default:
-				return shaders_.emplace_back<default_shader>(*this);
+				return shaders_.emplace_back<default_shader>(*this, stage);
 			}
 		}
 		default_shader& append_(VK_ VkShaderStageFlagBits stage, vector<::std::byte> code, vector<uint32_t> compiled, 
@@ -329,7 +336,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 		void compile_shader_(default_shader& shader) {
 			VK_ glslang_stage_t stage = to_glslang_stage(shader.stage);
 
-			auto version_minor = N::template parent<instance>().api_version_minor();
+			auto version_minor = parent_of<instance>(this)->api_version_minor();
 			VK_ glslang_input_t shader_input = input;
 			shader_input.stage = stage;
 			shader_input.code = reinterpret_cast<const char*>(shader.code.data());

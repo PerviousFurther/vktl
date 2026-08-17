@@ -11,6 +11,14 @@ endif()
 add_executable(hello_world main.cpp window.cpp)
 target_link_libraries(hello_world PRIVATE vktl)
 
+foreach(shader hello_world.vert hello_world.frag)
+	add_custom_command(TARGET hello_world POST_BUILD
+		COMMAND ${CMAKE_COMMAND} -E copy_if_different
+			${CMAKE_CURRENT_SOURCE_DIR}/${shader}
+			$<TARGET_FILE_DIR:hello_world>/${shader}
+	)
+endforeach()
+
 # target_link_libraries(hello_world PRIVATE
 #     spirv-reflect
 # )

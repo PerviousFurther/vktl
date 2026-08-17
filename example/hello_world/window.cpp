@@ -8,13 +8,13 @@ bool is_running(void* window) {
 
 	if (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE)) {
 		if (msg.message == WM_QUIT) {
-			return true;
+			return false;
 		}
 		TranslateMessage(&msg);
 		DispatchMessage(&msg);
 	}
 
-	return !IsWindow(static_cast<HWND>(window));
+	return IsWindow(static_cast<HWND>(window));
 }
 
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {

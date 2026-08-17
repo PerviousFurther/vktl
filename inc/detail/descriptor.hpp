@@ -1,5 +1,10 @@
 #pragma once
 
+// Interface style: descriptor allocators compose allocation policies and bind
+// frame-aware bind-set children through a small allocator-facing API.
+// Implementation: pools, layouts, and child lifetimes are coordinated through
+// explicit handles and handwritten vptr adapters.
+
 
 // descriptor allocator.
 
@@ -309,7 +314,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 			childs_.clear();
 		}
 
-		void append(object_of<descriptor_set_> auto& child) {
+		void append(object_of<bind_set_> auto& child) {
 			childs_.emplace_back(child);
 		}
 	

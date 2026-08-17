@@ -1,5 +1,10 @@
 #pragma once
 
+// Interface style: small value wrappers, handle policies, ranges, and access
+// helpers provide reusable building blocks for the composable object layers.
+// Implementation: ownership behavior is encoded in wrapper copy/move rules;
+// overloaded handle address operators are reserved for Vulkan out parameters.
+
 VKTL_EXPORT_ namespace vktl::detail {
 
 	template<typename T>
@@ -100,7 +105,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 			this->value = ::std::exchange(other.value, {});
 		}
 		constexpr reset_if_copy& operator=(reset_if_copy&& other) noexcept {
-			if (&other != this) {
+			if (::std::addressof(other) != this) {
 				assert(!this->value); // directly discard maybe cause memory leakage.
 				this->value = ::std::exchange(other.value, {});
 			}
@@ -184,7 +189,10 @@ VKTL_EXPORT_ namespace vktl::detail {
 		}
 
 		constexpr copyable_if_null(copyable_if_null const&) { assert(!this->value); }
-		constexpr copyable_if_null& operator=(copyable_if_null const&) { assert(!this->value); };
+		constexpr copyable_if_null& operator=(copyable_if_null const&) {
+			assert(!this->value);
+			return *this;
+		}
 
 		constexpr copyable_if_null(copyable_if_null&& other) noexcept = default;
 		constexpr copyable_if_null& operator=(copyable_if_null&& other) noexcept = default;
