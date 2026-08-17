@@ -14,6 +14,10 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 	template<typename T, size_t size>
 	using array = ::std::array<T, size>;
+	template<typename K>
+	using set = ::std::set<K>;
+	template<typename K, typename T>
+	using map = ::std::map<K, T>;
 	template<typename K, typename T>
 	using umap = ::std::unordered_map<K, T>;
 
@@ -125,4 +129,19 @@ VKTL_EXPORT_ namespace vktl::detail {
 		using apply = Tp<Ts..., Us...>;
 	};
 
+	template<typename T>
+	constexpr auto always_false = false;
+
+	bool invoke_by_index(size_t index, auto&& fn) {
+		return false;
+	}
+	bool invoke_by_index(size_t index, auto&& fn, auto&& first, auto&&...values) {
+		if (index == 0u) {
+			forward_(fn)(forward_(first));
+			return true;
+		}
+		else {
+			return invoke_by_index(index - 1u, forward_(fn), forward_(values)...);
+		}
+	}
 }

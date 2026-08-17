@@ -1,6 +1,12 @@
 #pragma once
 
 VKTL_EXPORT_ namespace vktl::detail {
+
+	template<typename T>
+	struct is_handle : ::std::is_pointer<T> {};
+	template<typename T>
+	constexpr auto is_handle_v = is_handle<::std::remove_cvref_t<T>>::value;
+
 	template<typename T>
 	struct default_value {
 		template<typename...Args>
@@ -46,30 +52,32 @@ VKTL_EXPORT_ namespace vktl::detail {
 	};
 
 	template<typename T>
-		requires(is_pointer<T>::value)
+		requires(is_handle_v<T>)
 	struct handle_<T> : default_value<T> {
 		using default_value<T>::default_value;
 
-		constexpr bool operator<(handle_ const& other) const noexcept {
-			return this->value < other.value;
+		constexpr bool operator<(T other) const noexcept {
+			return this->value < other;
 		}
-		constexpr bool operator>(handle_ const& other) const noexcept {
-			return this->value > other.value;
+		constexpr bool operator>(T other) const noexcept {
+			return this->value > other;
 		}
-		constexpr bool operator<=(handle_ const& other) const noexcept {
-			return this->value <= other.value;
+		constexpr bool operator<=(T other) const noexcept {
+			return this->value <= other;
 		}
-		constexpr bool operator>=(handle_ const& other) const noexcept {
-			return this->value >= other.value;
+		constexpr bool operator>=(T other) const noexcept {
+			return this->value >= other;
 		}
-
-		constexpr bool operator==(handle_ const& other) const noexcept {
-			return this->value == other.value;
+		constexpr bool operator==(T other) const noexcept {
+			return this->value == other;
 		}
-		constexpr bool operator!=(handle_ const& other) const noexcept {
-			return this->value != other.value;
+		constexpr bool operator!=(T other) const noexcept {
+			return this->value != other;
 		}
 	};
+
+	template<typename T>
+	struct trait;
 
 	// only move will operate on value, otherwise do reset.
 	template<typename T>
@@ -85,7 +93,6 @@ VKTL_EXPORT_ namespace vktl::detail {
 		constexpr reset_if_copy(reset_if_copy const&) : base{} {}
 		constexpr reset_if_copy& operator=(reset_if_copy const&) {
 			assert(!this->value); // directly discard value maybe cause memory leakage.
-			this->value = {};
 			return *this;
 		};
 
@@ -100,6 +107,69 @@ VKTL_EXPORT_ namespace vktl::detail {
 			return *this;
 		}
 	};
+
+	//template <typename T>
+	//struct handle_range_ {
+	//	T* value = nullptr;
+
+	//	constexpr handle_range_() noexcept = default;
+
+	//	constexpr handle_range_(uint32_t count) noexcept {
+	//		value = new T[count];
+	//	}
+
+	//	constexpr handle_range_(uint32_t count, T const& value) noexcept {	
+	//		for (auto& v : span(this->value = new T[count], count)) {
+	//			v = value;
+	//		}
+	//	}
+
+	//	VKTL_NODISCARD constexpr T& operator[](size_t index) const noexcept {
+	//		return value[index];
+	//	}
+
+	//	constexpr void reset() noexcept {
+	//		value = nullptr;
+	//	}
+
+	//	constexpr bool all_null() {
+
+	//	}
+	//};
+
+	//template<typename T>
+	//struct reset_if_copy_range : handle_range_<T> {
+	//	using base = handle_range_<T>;
+
+	//	constexpr reset_if_copy_range() = default;
+
+	//	template<typename... Args>
+	//	constexpr reset_if_copy_range(Args&&... args)
+	//		: base{ static_cast<Args&&>(args)... }
+	//	{
+	//	}
+
+	//	constexpr reset_if_copy_range(reset_if_copy_range const&) : base{} {}
+
+	//	constexpr reset_if_copy_range& operator=(reset_if_copy_range const&) {
+	//		assert(!this->first && !this->second);
+	//		return *this;
+	//	}
+
+	//	constexpr reset_if_copy_range(reset_if_copy_range&& other) noexcept {
+	//		this->first = ::std::exchange(other.first, {});
+	//		this->second = ::std::exchange(other.second, {});
+	//	}
+
+	//	constexpr reset_if_copy_range& operator=(reset_if_copy_range&& other) noexcept {
+	//		if (&other != this) {
+	//			assert(this->empty());
+	//			this->first = ::std::exchange(other.first, {});
+	//			this->second = ::std::exchange(other.second, {});
+	//		}
+	//		return *this;
+	//	}
+	//};
 
 	// runtime assert on copy when not null, no other usage.
 	template<typename T>
@@ -119,6 +189,8 @@ VKTL_EXPORT_ namespace vktl::detail {
 		constexpr copyable_if_null(copyable_if_null&& other) noexcept = default;
 		constexpr copyable_if_null& operator=(copyable_if_null&& other) noexcept = default;
 	};
+
+
 
 	template<typename T>
 	struct range {
@@ -250,17 +322,17 @@ VKTL_EXPORT_ namespace vktl::detail {
 			constexpr diff_img(VK_ VkImageAspectFlags mask,
 				uint32_t base_mip, uint32_t level_count,
 				uint32_t base_layer, uint32_t layer_count,
-				bool is_left = true)
+				bool is_first = true)
 				: base{
 					.aspectMask = mask,
 					.baseMipLevel = base_mip,
 					.levelCount = level_count,
 					.baseArrayLayer = base_layer,
 					.layerCount = layer_count,
-				}, is_left{ is_left } {
+				}, is_first{ is_first } {
 			}
 
-			bool is_left;
+			bool is_first;
 		};
 		template<typename T, size_t size = 4>
 		struct diffs : array<T, size> {
@@ -430,14 +502,15 @@ VKTL_EXPORT_ namespace vktl::detail {
 		template<typename T>
 		struct diff_buf : range<T> {
 			constexpr diff_buf() = default;
-			constexpr diff_buf(T offset, T size, bool is_left)
+			constexpr diff_buf(T offset, T size, bool is_first)
 				: range<T>{ offset, size }
-				, is_left{ is_left }
+				, is_first{ is_first }
 			{}
 
-			bool is_left;
+			bool is_first;
 		};
 
+		// return check is_first to judge the value is left or right.
 		template<typename T>
 		static constexpr auto get_not_intersected(T first_offset, T first_size, T second_offset, T second_size) {
 			diffs<diff_buf<T>, 2u> result{};
@@ -451,13 +524,13 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 			if (left < intersect_offset) {
 				auto is_first = left == first_offset;
-				auto value = is_first ? left : right;
+				// auto value = is_first ? left : right;
 				result[result.count++] = { left, intersect_offset - left, is_first };
 			}
 
 			if (right > intersect_end) {
 				auto is_first = right == left_end;
-				auto value = is_first ? left : right;
+				// auto value = is_first ? left : right;
 				result[result.count++] = { intersect_end, sub(right, intersect_end), is_first };
 			}
 
@@ -492,25 +565,38 @@ VKTL_EXPORT_ namespace vktl::detail {
 	} subres{};
 
 
+	struct default_access {
+		VK_ VkAccessFlags accesses = 0u;
+		VK_ VkDependencyFlags dependencies = 0u;
+		VK_ VkPipelineStageFlags stages = 0u;
+
+		constexpr bool operator==(default_access const& other) const noexcept {
+			return stages == other.stages 
+				&& accesses == other.accesses 
+				&& dependencies == other.dependencies;
+		}
+
+		constexpr auto& operator|=(default_access const& other) noexcept {
+			if (&other != this) {
+				stages |= other.stages; accesses |= other.accesses;
+				dependencies |= other.dependencies;
+			}
+			return *this;
+		}
+	};
+
 	struct default_buffer_access : range<VK_ VkDeviceSize> {
 		using range_type = range<VK_ VkDeviceSize>;
 
-		uint16_t index;
-		VK_ VkBufferCreateFlags flags;
-		VK_ VkBufferUsageFlags usage;
-		VK_ VkPipelineStageFlags stage;
-		VK_ VkAccessFlags access;
-		VK_ VkDependencyFlags dependency;
-
+		default_access access;
+		
 		constexpr bool operator==(default_buffer_access const& other) const noexcept {
 			return access == other.access;
 		}
 
 		constexpr auto& operator|=(default_buffer_access const& other) noexcept {
 			if (&other != this) {
-				flags |= other.flags; usage |= other.usage;
-				stage |= other.stage;  access |= other.access;
-				dependency |= other.dependency;
+				access |= other.access;
 			}
 			return *this;
 		}
@@ -518,16 +604,9 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 	struct default_image_access : VK_ VkImageSubresourceRange {
 		using range_type = VK_ VkImageSubresourceRange;
-		// uint32_t width;
-		// uint32_t height;
-		// uint16_t depth;
-		uint16_t index;
-		VK_ VkImageCreateFlags flags;
-		VK_ VkImageUsageFlags usage;
-		VK_ VkImageLayout layout; // recommanded layout.
-		VK_ VkPipelineStageFlags stage;
-		VK_ VkAccessFlags access;
-		VK_ VkDependencyFlags dependency;
+
+		VK_ VkImageLayout layout;
+		default_access access;
 
 		constexpr bool operator==(default_image_access const& other) const noexcept {
 			return access == other.access;
@@ -542,24 +621,51 @@ VKTL_EXPORT_ namespace vktl::detail {
 					layout = VK_ VK_IMAGE_LAYOUT_GENERAL;
 				}
 
-				flags |= other.flags; usage |= other.usage;
-				stage |= other.stage; access |= other.access;
-				dependency |= other.dependency;
+				access |= other.access;
 			}
 			return *this;
 		}
 	};
 
-	template<typename T, typename N>
-	constexpr auto parent_of(N* pthis) 
-		noexcept { return pthis->template parent<T>(); }
+	template<typename...VPtrs>
+	using box_list = vector<box<VPtrs...>>;
 
-	template<typename T, typename N>
-	constexpr auto handle_of(N* pthis) 
-		noexcept { return parent_of<T>(pthis)->handle(); }
+	// only for getter.
 
-	template<template<typename>typename...Tps>
-	using box_list = vector<box<Tps...>>;
-	template<typename...Ts>
-	using type_box_list = vector<type_box<Ts...>>;
+	template<typename T>
+	struct trait_vkfn {};
+	template<typename R, typename...Args>
+		requires(sizeof...(Args) >= 2)
+	struct trait_vkfn<R(*)(Args...)> {
+		static constexpr auto num_params = sizeof...(Args);
+		using params_list = ts<Args...>;
+		using result_type = ::std::remove_pointer_t<tuple_at_t<num_params - 1u, params_list>>;
+		using count_type = ::std::remove_pointer_t<tuple_at_t<num_params - 2u, params_list>>;
+		using return_type = R;
+	};
+
+	template<typename Vec, typename Fn, typename...Ts>
+	VK_ VkResult invoke(Vec& vec, Fn call, Ts...val) noexcept {
+		typename trait_vkfn<Fn>::count_type count;
+		constexpr bool return_void = ::std::is_void_v<typename trait_vkfn<Fn>::return_type>;
+
+		VK_ VkResult result = VK_ VK_SUCCESS;
+		if constexpr (return_void) {
+			call(val..., &count, nullptr);
+		}
+		else {
+			result = call(val..., &count, nullptr);
+		}
+
+		if (result == VK_ VK_SUCCESS) {
+			vec.resize(count);
+			if constexpr (return_void) {
+				call(val..., &count, vec.data());
+			}
+			else {
+				result = call(val..., &count, vec.data());
+			}
+		}
+		return result;
+	}
 }

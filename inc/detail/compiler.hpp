@@ -2,7 +2,12 @@
 
 #if !defined(VKTL_NO_COMPILER)
 
+//#if !defined(VKTL_NO_PRA_LIB)
+//// # pragma comment(lib, "glslc")
+//#endif
+
 namespace VK_NAMESPACE {
+#define SPIRV_REFLECT_DISABLE_CPP_BINDINGS
 #include <spirv-tools/libspirv.h>
 #include <glslang/Include/glslang_c_interface.h>
 #include "../../external/SPIRV-Reflect/spirv_reflect.h"
@@ -14,16 +19,9 @@ namespace VK_NAMESPACE {
 # include <unordered_map>
 #endif
 
-VKTL_EXPORT_ namespace vktl {
+VKTL_EXPORT_ namespace vktl::detail {
 	struct shader_handle_tag : detail::poly_list::node {
-		using base = detail::poly_list::node;
-
-		VK_ VkShaderModule module = VK_NULL_HANDLE;
-
-		template<typename Self, typename Parent>
-		explicit shader_handle_tag(::std::in_place_type_t<Self> tag)
-			: base(tag) 
-		{}
+		byte_view compiled;
 	};
 }
 
@@ -46,7 +44,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 		template<typename Self, typename Parent>
 		explicit default_shader(::std::in_place_type_t<Self> tag, Parent& parent_ref, VK_ VkShaderStageFlagBits stage)
-			: shader_handle_tag(tag), stage(stage), parent(parent_ref) {
+			: shader_handle_tag(tag), parent(parent_ref), stage(stage) {
 		}
 
 		template<typename Parent>
@@ -183,13 +181,13 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 	namespace compile {
 		inline auto glsl_refc_ = 0u;
-		static auto acquire() {
+		inline auto acquire() {
 			if (glsl_refc_ == 0u && !glslang_initialize_process()) {
 				throw error{ 0x42u, "[COMPILER] Initialize compiler failure." };
 			}
 			return ++glsl_refc_;
 		}
-		static auto release() noexcept {
+		inline auto release() noexcept {
 			if (glsl_refc_ > 0u && glsl_refc_ == 1u) {
 				glslang_finalize_process();
 			}
@@ -204,7 +202,6 @@ VKTL_EXPORT_ namespace vktl::detail {
 		m(compiler_, auto&&...others)
 			: N{ forward_(others)... } {
 			compile::acquire();
-			input.resource = VK_ glslang_default_resource();
 		}
 
 		~m() { compile::release(); }
@@ -220,8 +217,8 @@ VKTL_EXPORT_ namespace vktl::detail {
 		}
 		shader_handle append_compiled(byte_view code, VK_ VkShaderStageFlagBits stage, ::std::string entry_point = "main") {
 			return &append_(stage, {}, 
-				::std::vector<::std::uint32_t>(reinterpret_cast<const uint32_t*>(code.data()), 
-					code.size() / sizeof(uint32_t)), {}, ::std::move(entry_point));
+				::std::vector<::std::uint32_t>(reinterpret_cast<const uint32_t*>(code.data()), reinterpret_cast<const uint32_t*>(code.data() + code.size())), 
+				{}, ::std::move(entry_point));
 		}
 
 		void init(::std::invocable<default_shader&> auto&& func = &compile::duck_invoker_) {
@@ -235,17 +232,6 @@ VKTL_EXPORT_ namespace vktl::detail {
 				}
 
 				func(shader);
-
-				// compiler allow device is not created.
-				if (auto hdv = handle_of<device>(this)) {
-					VK_ VkShaderModuleCreateInfo cinfo{
-						.sType = VK_ VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
-						.codeSize = shader.compiled.size() * sizeof(uint32_t), // 修复：字节大小必须乘以 sizeof(uint32_t)
-						.pCode = shader.compiled.data(),
-					};
-					VK_ vkCreateShaderModule(hdv, &cinfo, N::allocator(), &shader.module)
-						| popup{ "[COMPILER] Create shader module failure." };
-				}
 			}
 		}
 
@@ -303,33 +289,31 @@ VKTL_EXPORT_ namespace vktl::detail {
 				throw error{ 0x402, err.data() };
 			}
 
-			file.read(buffer.data(), size);
+			file.read(reinterpret_cast<char*>(buffer.data()), size);
 			return buffer;
 		}
 
 		default_shader& append_(VK_ VkShaderStageFlagBits stage) {
 			::std::lock_guard _{N::get_lock()};
 			switch (stage) {
-				switch (stage) {
-				case VK_SHADER_STAGE_VERTEX_BIT:
-					return shaders_.emplace_back<default_vertex_shader>(*this);
-				case VK_SHADER_STAGE_FRAGMENT_BIT:
-					return shaders_.emplace_back<default_fragment_shader>(*this);
-				case VK_SHADER_STAGE_COMPUTE_BIT:
-					return shaders_.emplace_back<default_compute_shader>(*this);
-				case VK_SHADER_STAGE_GEOMETRY_BIT:
-					return shaders_.emplace_back<default_geometry_shader>(*this);
-				case VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT:
-					return shaders_.emplace_back<default_tess_control_shader>(*this);
-				case VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT:
-					return shaders_.emplace_back<default_tess_eval_shader>(*this);
-				case VK_SHADER_STAGE_TASK_BIT_EXT:
-					return shaders_.emplace_back<default_task_shader>(*this);
-				case VK_SHADER_STAGE_MESH_BIT_EXT:
-					return shaders_.emplace_back<default_mesh_shader>(*this);
-				default:
-					return shaders_.emplace_back<default_shader>(*this);
-				}
+			case VK_ VK_SHADER_STAGE_VERTEX_BIT:
+				return shaders_.emplace_back<default_vertex_shader>(*this);
+			case VK_ VK_SHADER_STAGE_FRAGMENT_BIT:
+				return shaders_.emplace_back<default_fragment_shader>(*this);
+			case VK_ VK_SHADER_STAGE_COMPUTE_BIT:
+				return shaders_.emplace_back<default_compute_shader>(*this);
+			case VK_ VK_SHADER_STAGE_GEOMETRY_BIT:
+				return shaders_.emplace_back<default_geometry_shader>(*this);
+			case VK_ VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT:
+				return shaders_.emplace_back<default_tess_control_shader>(*this);
+			case VK_ VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT:
+				return shaders_.emplace_back<default_tess_eval_shader>(*this);
+			case VK_ VK_SHADER_STAGE_TASK_BIT_EXT:
+				return shaders_.emplace_back<default_task_shader>(*this);
+			case VK_ VK_SHADER_STAGE_MESH_BIT_EXT:
+				return shaders_.emplace_back<default_mesh_shader>(*this);
+			default:
+				return shaders_.emplace_back<default_shader>(*this);
 			}
 		}
 		default_shader& append_(VK_ VkShaderStageFlagBits stage, vector<::std::byte> code, vector<uint32_t> compiled, 
@@ -416,8 +400,8 @@ VKTL_EXPORT_ namespace vktl::detail {
 				shader.compiled.data(),
 				&spv_module
 			);
-			if (reflect_res != SPV_REFLECT_RESULT_SUCCESS) {
-				throw error{ uint32_t(reflect_res), "[SPIRV-Reflect] Failed to create module." };
+			if (reflect_res != VK_ SPV_REFLECT_RESULT_SUCCESS) {
+				throw error{ reflect_res, "[SPIRV-Reflect] Failed to create module." };
 			}
 			defer reflect_guard{ [&]() { VK_ spvReflectDestroyShaderModule(&spv_module); } };
 
@@ -482,21 +466,21 @@ VKTL_EXPORT_ namespace vktl::detail {
 				} break;
 
 				case VK_ VK_SHADER_STAGE_FRAGMENT_BIT : {
-					auto& frag_shader = static_cast<default_fragment_shader&>(shader);
-					uint32_t output_count = 0;
-					VK_ spvReflectEnumerateOutputVariables(&spv_module, &output_count, nullptr);
-					vector<VK_ SpvReflectInterfaceVariable*> output_vars(output_count);
-					VK_ spvReflectEnumerateOutputVariables(&spv_module, &output_count, output_vars.data());
+					// auto& frag_shader = static_cast<default_fragment_shader&>(shader);
+					// uint32_t output_count = 0;
+					// VK_ spvReflectEnumerateOutputVariables(&spv_module, &output_count, nullptr);
+					// vector<VK_ SpvReflectInterfaceVariable*> output_vars(output_count);
+					// VK_ spvReflectEnumerateOutputVariables(&spv_module, &output_count, output_vars.data());
 
-					frag_shader.blend_attachments.clear();
-					for (const auto* out_var : output_vars) {
-						if (out_var->decoration_flags & VK_ SPV_REFLECT_DECORATION_BUILT_IN) continue;
-
-						blend.colorWriteMask = VK_ VK_COLOR_COMPONENT_R_BIT | VK_ VK_COLOR_COMPONENT_G_BIT |
-							VK_ VK_COLOR_COMPONENT_B_BIT | VK_ VK_COLOR_COMPONENT_A_BIT;
-						blend.blendEnable = VK_FALSE;
-						frag_shader.blend_attachments.push_back(blend);
-					}
+					// frag_shader.blend_attachments.clear();
+					// for (const auto* out_var : output_vars) {
+					// 	if (out_var->decoration_flags & VK_ SPV_REFLECT_DECORATION_BUILT_IN) continue;
+					// 
+					// 	blend.colorWriteMask = VK_ VK_COLOR_COMPONENT_R_BIT | VK_ VK_COLOR_COMPONENT_G_BIT |
+					// 		VK_ VK_COLOR_COMPONENT_B_BIT | VK_ VK_COLOR_COMPONENT_A_BIT;
+					// 	blend.blendEnable = VK_FALSE;
+					// 	frag_shader.blend_attachments.push_back(blend);
+					// }
 				} break;
 
 				case VK_ VK_SHADER_STAGE_COMPUTE_BIT : {
@@ -509,38 +493,39 @@ VKTL_EXPORT_ namespace vktl::detail {
 				} break;
 
 				case VK_ VK_SHADER_STAGE_GEOMETRY_BIT : {
-					auto& geom_shader = static_cast<default_geometry_shader&>(shader);
-					if (spv_module.entry_point_count > 0) {
-						geom_shader.invocations = spv_module.entry_points[0].geometry.invocations;
-						geom_shader.max_output_vertices = spv_module.entry_points[0].geometry.vertices;
-					}
+					// auto& geom_shader = static_cast<default_geometry_shader&>(shader);
+					
+					// if (spv_module.entry_point_count > 0) {
+					// 	geom_shader.invocations = spv_module.entry_points[0].geometry.invocations;
+					// 	geom_shader.max_output_vertices = spv_module.entry_points[0].geometry.vertices;
+					// }
 				} break;
 
 				case VK_ VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT : {
-					auto& tess_ctrl = static_cast<default_tess_control_shader&>(shader);
-					if (spv_module.entry_point_count > 0) {
-						tess_ctrl.patch_control_points = spv_module.entry_points[0].tessellation.output_vertices;
-					}
+					// auto& tess_ctrl = static_cast<default_tess_control_shader&>(shader);
+					// if (spv_module.entry_point_count > 0) {
+					// 	tess_ctrl.patch_control_points = spv_module.entry_points[0].tessellation.output_vertices;
+					// }
 				} break;
 
 				case VK_ VK_SHADER_STAGE_TASK_BIT_EXT : {
-					auto& task_shader = static_cast<default_task_shader&>(shader);
-					if (spv_module.entry_point_count > 0) {
-						task_shader.x = spv_module.entry_points[0].local_size.x;
-						task_shader.y = spv_module.entry_points[0].local_size.y;
-						task_shader.z = spv_module.entry_points[0].local_size.z;
-					}
+					// auto& task_shader = static_cast<default_task_shader&>(shader);
+					// if (spv_module.entry_point_count > 0) {
+					// 	task_shader.x = spv_module.entry_points[0].local_size.x;
+					// 	task_shader.y = spv_module.entry_points[0].local_size.y;
+					// 	task_shader.z = spv_module.entry_points[0].local_size.z;
+					// }
 				} break;
 
 				case VK_ VK_SHADER_STAGE_MESH_BIT_EXT : {
-					auto& mesh_shader = static_cast<default_mesh_shader&>(shader);
-					if (spv_module.entry_point_count > 0) {
-						mesh_shader.x = spv_module.entry_points[0].local_size.x;
-						mesh_shader.y = spv_module.entry_points[0].local_size.y;
-						mesh_shader.z = spv_module.entry_points[0].local_size.z;
-						mesh_shader.max_vertices = spv_module.entry_points[0].mesh.max_vertices;
-						mesh_shader.max_primitives = spv_module.entry_points[0].mesh.max_primitives;
-					}
+					// auto& mesh_shader = static_cast<default_mesh_shader&>(shader);
+					// if (spv_module.entry_point_count > 0) {
+					// 	mesh_shader.x = spv_module.entry_points[0].local_size.x;
+					// 	mesh_shader.y = spv_module.entry_points[0].local_size.y;
+					// 	mesh_shader.z = spv_module.entry_points[0].local_size.z;
+					// 	mesh_shader.max_vertices = spv_module.entry_points[0].mesh.max_vertices;
+					// 	mesh_shader.max_primitives = spv_module.entry_points[0].mesh.max_primitives;
+					// }
 				} break;
 
 				default: break;
@@ -593,7 +578,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 		void init(Fn&& fn = call_duck) {
 			N::init([&](default_shader& shader) {
 				if (!shader.compiled.empty()) {
-					// vulkan 
+					spv_target_env target_env;
 					auto minor = parent_of<instance>(this)->api_version_minor();
 					switch (minor) {
 					case 0:
@@ -613,18 +598,20 @@ VKTL_EXPORT_ namespace vktl::detail {
 						break;
 					default:assert(false);
 					}
+					auto* option = VK_ spvOptimizerOptionsCreate();
+					defer _0{ [&]() { VK_ spvOptimizerOptionsDestroy(option); } };
 					auto* optimizer = VK_ spvOptimizerCreate(target_env);
-					VK_ spvOptimizerOptionsSetPreserveBindings(optimizer, params_.reserve_unused_bindings);
-					VK_ spvOptimizerOptionsSetPreserveSpecConstants(optimizer, params_.reserve_unused_spec_constants);
-					VK_ spvOptimizerOptionsSetRunValidator(optimizer, params_.validate);
-					if (!optimizer) { 
-						throw error{0x500, "[COMPILER] Create optmizer failure."}; 
+					if (!optimizer) {
+						throw error{ 0x500, "[COMPILER] Create optmizer failure." };
 					}
+					defer _1{ [&]() { VK_ spvOptimizerDestroy(optimizer); } };
+					VK_ spvOptimizerOptionsSetPreserveBindings(option, params_.reserve_unused_bindings);
+					VK_ spvOptimizerOptionsSetPreserveSpecConstants(option, params_.reserve_unused_spec_constants);
+					VK_ spvOptimizerOptionsSetRunValidator(option, params_.validate);
+					
 					if constexpr (::std::invocable<Fn&, VK_ spv_optimizer_t*>) {
 						fn(optimizer);
 					}
-					defer _{ [&]() { VK_ spvOptimizerDestroy(optimizer); } };
-
 					VK_ spvOptimizerRegisterPerformancePasses(optimizer);
 					VK_ spv_binary optimized_binary = nullptr;
 					VK_ spv_result_t result = VK_ spvOptimizerRun(
@@ -635,7 +622,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 						nullptr
 					);
 					if (result == VK_ SPV_SUCCESS && optimized_binary) {
-						shader.compiled.assign(optimized_binary->code, optimized_binary->code + optimized_binary->word_count);
+						shader.compiled.assign(optimized_binary->code, optimized_binary->code + optimized_binary->wordCount);
 						VK_ spvBinaryDestroy(optimized_binary);
 					}
 				}
@@ -675,7 +662,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 	template<typename N>
 	struct m<customize_include_, N> : N {
 		constexpr m(customize_include_ tag, auto&&... others)
-			: N{ std::forward<decltype(others)>(others)... } {
+			: N{ forward_(others)... } {
 			relocate_this();
 		}
 
@@ -702,7 +689,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 				if (::std::filesystem::is_regular_file(full_path)) {
 					::std::ifstream file(full_path, ::std::ios::binary);
 					if (file) {
-						::std::string content(::std::filesystem::file_size(full_path));
+						::std::string content(::std::filesystem::file_size(full_path), '\0');
 						file.read(content.data(), content.size());
 						return content;
 					}
@@ -724,8 +711,8 @@ VKTL_EXPORT_ namespace vktl::detail {
 		}
 
 	private:
-		vector<std::filesystem::path> search_paths_;
-		umap<std::string, std::string> string_files_;
+		vector<::std::filesystem::path> search_paths_;
+		umap<::std::string, ::std::string> string_files_;
 
 		VK_ glsl_include_callbacks_t callback_{};
 	};

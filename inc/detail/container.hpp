@@ -9,10 +9,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 		struct node {
 			friend poly_list;
 
-			template<typename T>
-			constexpr node(::std::in_place_type_t<T>) noexcept 
-				: deleter{ [](node const* ptr) noexcept { delete static_cast<T*>(ptr); } } 
-			{}
+			node() = default;
 
 			node(const node&) = delete;
 			node& operator=(const node&) = delete;
@@ -20,9 +17,9 @@ VKTL_EXPORT_ namespace vktl::detail {
 			node& operator=(node&&) noexcept = delete;
 
 			template<::std::derived_from<node> T >
-			auto& as() const noexcept { return static_cast<const node<T>*>(this)->value; }
+			auto& as() const noexcept { return *static_cast<const T*>(this); }
 			template<::std::derived_from<node> T>
-			auto& as() noexcept { return static_cast<node<T>*>(this)->value; }
+			auto& as() noexcept { return *static_cast<T*>(this); }
 
 			template<::std::derived_from<node> T>
 			operator T& () noexcept { return as<T>(); }
@@ -60,7 +57,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 				requires(is_const && !other_const)
 			basic_iterator(const basic_iterator<other_const>& other) noexcept : ptr_(other.ptr_) {}
 
-			value_type operator*() const noexcept { return *ptr_; }
+			reference operator*() const noexcept { return *ptr_; }
 			pointer operator->() const noexcept { return ptr_; }
 
 			basic_iterator& operator++() noexcept { ptr_ = ptr_->next; return *this; }
@@ -100,14 +97,15 @@ VKTL_EXPORT_ namespace vktl::detail {
 		}
 
 		template<::std::derived_from<node> T, typename... Args>
-		T& emplace(const_iterator where, Args&&... args) {
+		T& emplace(const_iterator where, Args&&... args) requires(::std::constructible_from<T, Args&&...>) {
 			auto* obj = new T(static_cast<Args&&>(args)...);
 			insert_before(where.ptr_, obj);
-			return obj->value;
+			obj->deleter_ = [](void const* ptr) noexcept { delete static_cast<T const*>(ptr); };
+			return *obj;
 		}
 
 		template<::std::derived_from<node> T, typename... Args>
-		T& emplace_back(Args&&... args) {
+		T& emplace_back(Args&&... args){
 			return emplace<T>(&root_, static_cast<Args&&>(args)...);
 		}
 
@@ -131,13 +129,15 @@ VKTL_EXPORT_ namespace vktl::detail {
 			n->next->prev = n->prev;
 			--size_;
 
-			if (n->deleter) n->deleter(n);
+			assert(n->deleter); // might be sential, it is not allowed.
+			n->deleter(n);
+
 			return iterator(next_node);
 		}
 
 		template<::std::derived_from<node> T>
 		void erase(T& value) noexcept {
-			auto* node_ptr = static<node*>(&value);
+			auto* node_ptr = static_cast<node*>(&value);
 			erase(const_iterator(node_ptr));
 		}
 
@@ -187,8 +187,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 	// if defined VK_DEFINE_HANDLE to customize vulkan's handle, 
 	// you need to specialize this to enable customize vulkan handle.
-	template<typename T>
-	struct is_pointer : ::std::is_pointer<T> {};
+
 
 	template<typename...Ts>
 	struct vectors {
@@ -268,6 +267,24 @@ VKTL_EXPORT_ namespace vktl::detail {
 		::std::tuple<Ts&...> row(size_type index) { assert(index < size_); return row_tuple(index, ::std::index_sequence_for<Ts...>{}); }
 		::std::tuple<Ts const&...> row(size_type index) const { assert(index < size_); return row_tuple(index, ::std::index_sequence_for<Ts...>{}); }
 
+		bool operator==(vectors const& other) const noexcept requires(((::std::equality_comparable<Ts>) &&...)) {
+			if (&other == this) {
+				return true;
+			}
+			if (other.size() != this->size()) {
+				return false;
+			}
+			for (auto i = 0u; i < size_; i++) {
+				if (!::std::apply(
+					[](auto const& left, auto const& right) {
+						return left == right;
+					}, ::std::forward_as_tuple(other.row(i), this->row(i)))) {
+					return false;
+				}
+			}
+			return true;
+		}
+
 	private:
 		template<bool is_const>
 		class row_iterator {
@@ -284,7 +301,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 			constexpr row_iterator(const row_iterator&) = default;
 
 			template<::std::size_t index = 0u>
-			constexpr tuple_at_t<index, value_type> get() const { return owner_->row(index_).template get<index>(); }
+			constexpr tuple_at_t<index, value_type> get() const { return::std::get<index>(owner_->row(index_)); }
 
 			constexpr value_type operator*() const { return owner_->row(index_); }
 			constexpr value_type operator[](difference_type offset) const { return owner_->row(index_ + offset); }
@@ -297,13 +314,15 @@ VKTL_EXPORT_ namespace vktl::detail {
 			constexpr row_iterator& operator-=(difference_type offset) { index_ -= offset; return *this; }
 			constexpr row_iterator operator+(difference_type offset) const { auto copy = *this; return copy += offset; }
 			constexpr row_iterator operator-(difference_type offset) const { auto copy = *this; return copy -= offset; }
-			friend constexpr row_iterator operator+(difference_type offset, row_iterator it) { return it + offset; }
 
 			template<bool C> constexpr difference_type operator-(const row_iterator<C>& other) const {
 				return static_cast<difference_type>(index_) - static_cast<difference_type>(other.index_);
 			}
-			template<bool C> constexpr bool operator==(const row_iterator<C>& other) const { return owner_ == other.owner_ && index_ == other.index_; }
-			template<bool C> constexpr auto operator<=>(const row_iterator<C>& other) const { return index_ <=> other.index_; }
+			constexpr bool operator!=(row_iterator const& other) const { return !operator==(other); }
+			constexpr bool operator==(row_iterator const& other) const { return owner_ == other.owner_ && index_ == other.index_; }
+			template<bool C> constexpr bool operator==(row_iterator<C> const& other) const { return owner_ == other.owner_ && index_ == other.index_; }
+
+			// template<bool C> constexpr auto operator<=>(const row_iterator<C>& other) const { return index_ <=> other.index_; }
 
 			VKTL_NODISCARD size_type index() const noexcept { return index_; }
 			VKTL_NODISCARD owner_type* owner() const noexcept { return owner_; }
@@ -518,7 +537,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 			for (; itb != ite; ) {
 				auto c = ::std::move(stack.front());
 				stack.erase(stack.begin());
-				if (c.stages == itb->stages && itb->dependency == c.dependency) {
+				if (c.stages == itb->stages && itb->dependencies == c.dependencies) {
 					auto& it_range = static_cast<range_type const&>(*itb);
 					auto& c_range = static_cast<range_type const&>(c);
 					if (*itb == c && subres.adjacent_intersect(it_range, c_range)) {
@@ -534,9 +553,9 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 						bool can_break = !stack.size();
 						for (auto non_intersected : subres.get_not_intersected(it_range, c_range)) {
-							auto slice = non_intersected.is_left ? *itb : c;
+							auto slice = non_intersected.is_first ? *itb : c;
 							static_cast<range_type&>(slice) = static_cast<range_type&&>(non_intersected);
-							if (!non_intersected.is_left && !subres.empty(slice)) {
+							if (!non_intersected.is_first && !subres.empty(slice)) {
 								vec.insert(itb, ::std::move(slice));
 								can_break = false;
 							}

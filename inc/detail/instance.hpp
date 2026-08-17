@@ -33,33 +33,37 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 	protected:
 		bool append_cstr(const char* value, uint16_t minor) {
-			assert(value); // no need to append string.
+			assert(value != nullptr && "Value pointer must not be null");
 			constexpr auto make_sv = [](char const* elem) { return::std::string_view{ elem }; };
-			minor = ::std::clamp(minor, uint16_t(1u), api::max_minor + 1u);
-			auto index = api::max_minor - minor;
-			auto local_end = strings_.begin() + splits_[index];
-			auto it = ::std::ranges::lower_bound(
-				strings_.begin(), local_end, value, {}, make_sv);
-			if (it == local_end || make_sv(*it) != make_sv(value)) {
-				strings_assert(::std::ranges::find_if(vec, value, {}, make_sv) == vec.end()); // not allow duplicated extension/layer at different vulkan version.
+
+			minor = (::std::clamp)(minor, uint16_t(0u), uint16_t(api::max_minor));
+
+			auto section_begin = strings_.begin() + splits_[minor];
+			auto section_end = minor + 1 > api::max_minor ? strings_.end() : strings_.begin() + splits_[minor + 1];
+
+			auto it = ::std::ranges::lower_bound(section_begin, section_end, value, {}, make_sv);
+			if (it == section_end || make_sv(*it) != make_sv(value)) {
 				strings_.insert(it, value);
-				for (auto& value : ::std::span{ splits_ }.subpan(index)) {
-					value;
+
+				for (auto& val : ::std::span{ splits_.begin(), splits_.begin() + minor }) {
+					val++;
 				}
 				return true;
-			}
+			} 
 			else {
 				return false;
 			}
 		}
 
-		auto cstr_span(uint16_t index) const noexcept { 
-			return::std::span{ strings_ }.subspan(splits_[api::max_minor + 1u - version]); 
+		auto cstr_span(uint16_t minor) const noexcept {
+			minor = (::std::clamp)(minor, uint16_t(1u), uint16_t(api::max_minor + 1u));
+			const auto index = minor;
+			return ::std::span{ strings_ }.subspan(splits_[index]);
 		}
 
 	protected:
 		vector<const char*> strings_;
-		array<uint16_t, api::max_minor + 1u> splits_;
+		array<uint16_t, api::max_minor + 1u> splits_{};
 	};
 
 	template<typename N>
@@ -69,7 +73,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 			: base{ forward_(values)... }
 		{}
 
-		bool append_layer(const char* layer, uint16_t disabled_minor = api::max_minor + 1u) {
+		bool append_layers(const char* layer, uint16_t disabled_minor = api::max_minor) {
 			return this->append_cstr(layer, disabled_minor);
 		}
 
@@ -86,7 +90,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 			: base{ forward_(values)... }
 		{}
 
-		bool append_extension(const char* extension, uint16_t disabled_minor = api::max_minor + 1u) {
+		bool append_extensions(const char* extension, uint16_t disabled_minor = api::max_minor) {
 			return this->append_cstr(extension, disabled_minor);
 		}
 
@@ -97,8 +101,8 @@ VKTL_EXPORT_ namespace vktl::detail {
 	};
 
 	template<typename N>
-	struct m<instance, N> : basic_layers<basic_extensions<N>> {
-		using base = basic_layers<N>;
+	struct m<instance, N> : basic_extensions<basic_layers<N>> {
+		using base = basic_extensions<basic_layers<N>>;
 
 		constexpr m(instance const& info, auto&&...others)
 			: base{ forward_(others)... }
@@ -148,7 +152,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 		void api_version_minor(uint32_t minor) noexcept { 
 			app_.apiVersion = 
-				::std::clamp(VK_MAKE_API_VERSION(0, 1, value, 0), VK_API_VERSION_1_0, max_api_version());
+				::std::clamp(VK_MAKE_API_VERSION(0, 1, minor, 0), VK_API_VERSION_1_0, max_api_version());
 		}
 		uint32_t api_version_minor() noexcept { return VK_API_VERSION_MINOR(app_.apiVersion); }
 
@@ -170,7 +174,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 		constexpr m(debug_utils const& utils, auto&&...others)
 			: N{ forward_(others)... }
 			, debug_messanger{ .sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT, } {
-			N::append_extension(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+			N::append_extensions(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
 		}
 
 		void relocate() {
@@ -188,7 +192,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 	struct m<validation_layer_, N> : N {
 		constexpr m(validation_layer_, auto&&...others)
 			: N{ forward_(others)... } {
-			N::append_layer("VK_LAYER_KHRONOS_validation");
+			N::append_layers("VK_LAYER_KHRONOS_validation");
 		}
 	};
 }

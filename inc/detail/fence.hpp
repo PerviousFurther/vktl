@@ -1,5 +1,39 @@
 #pragma once
 
+VKTL_EXPORT_ namespace vktl::vptr {
+    struct fence : handle_owner<VkFence> {
+		template<typename C>
+		struct apply;
+
+        // bool(*is_signaled_)(const void*) = nullptr;
+        bool(*wait_)(const void*, uint64_t) = nullptr;
+    };
+
+	template<typename C>
+	struct fence::apply : C {
+		using base = C;
+
+		template<typename T>
+		void rebind() {
+			vptr_ = { 
+				.wait_ = [](const void* ptr, uint64_t timeout) -> bool {
+					return static_cast<const T*>(ptr)->wait(timeout);
+				}
+			};
+		}
+
+		// bool is_signaled() const {
+		//     return vptr_.is_signaled_(C::get_this());
+		// }
+		bool wait(uint64_t timeout = UINT64_MAX) const {
+			return vptr_.wait_(C::get_this(), timeout);
+		}
+
+	private:
+		fence vptr_;
+	};
+}
+
 VKTL_EXPORT_ namespace vktl::detail {
 	template<typename N>
 	struct m<fence, N> : N {
@@ -27,10 +61,15 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 		auto handle() const noexcept { return handle_.value; }
 
+		void wait() const noexcept {
+			
+		}
+
 	protected:
 		VK_ VkFenceCreateInfo info;
 
 	private:
+		bool signal = false;
 		reset_if_copy<VK_ VkFence> handle_;
 	};
 }

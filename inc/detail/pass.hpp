@@ -57,22 +57,24 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 		c(render_pass_, auto&&...infos)
 			: base{ forward_(infos)... }
-		{
-
-		}
+		{}
 
 		~c() { reset(); }
 
 		void init() {
 			if (!handle_) {
-				VK_ vkDestroyRenderPass(handle_of<N, device>(), handle_, N::allocator());
+				VK_ vkCreateRenderPass(handle_of<device>(this), &info, N::allocator(), &handle_);
 			}
 		}
 
 		void reset() {
 			if (handle_) {
-				VK_ vkDestroyRenderPass(handle_of<N, device>(), handle_, N::allocator());
+				VK_ vkDestroyRenderPass(handle_of<device>(this), handle_, N::allocator());
 			}
+		}
+
+		void bind(object_of<image_view>& image, uint32_t attachment) {
+
 		}
 
 	protected:
@@ -92,7 +94,6 @@ VKTL_EXPORT_ namespace vktl::detail {
 		vectors<VK_ VkSubpassDescription,
 			array<vector<VK_ VkAttachmentReference>, 4>> subpasses_;
 		vector<VK_ VkSubpassDependency> dependencies_;
-
 		copyable_if_null<VK_ VkRenderPass> handle_{ VK_NULL_HANDLE };
 	};
 

@@ -1,5 +1,9 @@
 #pragma once
 
+VKTL_EXPORT_ namespace vktl::vptr {
+	
+}
+
 VKTL_EXPORT_ namespace vktl::detail {
 
 	template<typename N>

@@ -1,14 +1,6 @@
 #pragma once
 
-// --------------PUBLIC SCOPE---------------
-// this scope should not contain vulkan objects.
-// it should consider as RHI like interfaces.
-// for export interface's usage.
-// 
-// BEFORE EDIT: 
-// 1. DO NOT add comment that not related with functionality, or mechiasm explain.
-// 2. Prefer english comment.
-// 
+
 
 #if defined(VKTL_EXPORT_MODULE)
 #	define VKTL_EXPORT_ export 
@@ -93,12 +85,16 @@
 #if VKTL_HAVE_STD_
 # include <string>
 # include <vector>
+# include <set>
+# include <map>
 # include <unordered_map>
 # include <algorithm>
 # include <atomic>
 # include <mutex>
 # include <array>
 # include <ranges>
+# include <bit>
+# include <initializer_list>
 #endif
 
 #if !defined(VK_NAMESPACE)
@@ -118,6 +114,7 @@ namespace VK_NAMESPACE {
 #include "detail/utils.hpp"
 #include "detail/container.hpp"
 #include "detail/objects.hpp"
+
 
 #include "detail/common.hpp"
 
@@ -139,12 +136,14 @@ VKTL_EXPORT_ namespace vktl {
 #include "detail/fence.hpp"
 #include "detail/event.hpp"
 #include "detail/semaphore.hpp"
-#include "detail/allocator.hpp"
-#include "detail/buffer.hpp"
-#include "detail/image.hpp"
 
 #include "detail/swapchain.hpp"
-
+#include "detail/resource.hpp"
+#include "detail/buffer.hpp"
+#include "detail/image.hpp"
+#include "detail/descriptor.hpp"
+#include "detail/descriptor_set.hpp"
+#include "detail/sampler.hpp"
 #include "detail/execution.hpp"
 #include "detail/task.hpp"
 
