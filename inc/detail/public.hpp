@@ -1,19 +1,15 @@
 #pragma once
 
-// Interface style: lightweight aggregate descriptors and constexpr tags form
-// fluent `object | descriptor | extension` expressions throughout VKTL.
-// Implementation: declarations stay Vulkan-free where practical; detail
-// mixins consume these values later and retain all runtime ownership.
-
-// --------------PUBLIC SCOPE---------------
+// --- Agents specification -------------------------------------------------
 // this scope should not contain vulkan objects.
-// it should consider as RHI like interfaces.
-// for export interface's usage.
-// 
-// BEFORE EDIT: 
-// 1. DO NOT add comment that not related with functionality, or mechiasm explain.
-// 2. Prefer english comment.
-// 
+// Resource-usage tags identify a logical bind-set slot with `index` only.
+// Backend binding coordinates belong to focused tags in
+// `resource_usage_extensions`; never add set, buffer, or heap coordinates to
+// a resource-usage tag.
+// Resource-usage and binding-coordinate tags normally use `express` and stay
+// out of the inheritance chain. Use an `m<Tag, N>` component only when a tag
+// must retain independent state or behavior.
+// --------------------------------------------------------------------------
 
 VKTL_EXPORT_ namespace vktl {
 	using size_t = ::std::size_t;
@@ -21,6 +17,7 @@ VKTL_EXPORT_ namespace vktl {
 	using uint32_t = ::std::uint32_t;
 	using uint16_t = ::std::uint16_t;
 	using uint8_t = ::std::uint8_t;
+	using frame_scope_id = uint32_t;
 }
 
 VKTL_EXPORT_ namespace vktl::detail {
@@ -30,6 +27,10 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 		template<::std::unsigned_integral T>
 		constexpr operator T() const noexcept { return ~T(0u); }
+
+		// c++ dont allow convert to T and then use bultin operator==.
+		// thus manually use it.
+
 		template<::std::unsigned_integral T>
 		friend constexpr bool operator==(T left, const invalid_) noexcept { return left == value<T>; }
 		template<::std::unsigned_integral T>
@@ -38,7 +39,6 @@ VKTL_EXPORT_ namespace vktl::detail {
 		friend constexpr bool operator==(const invalid_, T left) noexcept { return left == value<T>; }
 		template<::std::unsigned_integral T>
 		friend constexpr bool operator!=(const invalid_, T left) noexcept { return left != value<T>; }
-
 	} invalid{}, maximum{};
 
 	// template<template<typename>typename...Ts>
@@ -81,7 +81,6 @@ VKTL_EXPORT_ namespace vktl::detail {
 		constexpr auto get_this() const noexcept { return pthis; }
 
 	protected:
-
 		void* pthis = nullptr;
 	};
 
@@ -108,7 +107,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 	template<typename>
 	struct unique;
 
-	// lefter template at topper of inheritance chain.
+	// type at left usally at top of inheritance chain.
 	template<typename...VPtrs>
 	struct box : apply_compose<vptr_base, VPtrs...> {
 		using base = apply_compose<vptr_base, VPtrs...>;
@@ -190,25 +189,26 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 		~box() { reset(); }
 
-		bool shared() const noexcept { return add_ref_; }
-		bool unique() const noexcept { return !add_ref_ && release_; }
-		bool view() const noexcept { return !add_ref_ && !release_; }
+		constexpr bool shared() const noexcept { return add_ref_; }
+		constexpr bool unique() const noexcept { return !add_ref_ && release_; }
+		constexpr bool view() const noexcept { return !add_ref_ && !release_; }
 
-		bool empty() const noexcept { return !this->pthis; }
+		constexpr bool empty() const noexcept { return !this->pthis; }
 
-		void reset() noexcept {
+		constexpr void reset() noexcept {
 			if (release_) { ::std::exchange(release_, nullptr)(::std::exchange(this->pthis, nullptr)); }
 			add_ref_ = nullptr;
 		}
 
-		void* get() const noexcept { return this->pthis; }
+		constexpr void* get() const noexcept { return this->pthis; }
 
-		bool operator==(box const& other) 
-			const noexcept { return other.pthis == this->pthis; }
+		constexpr bool operator==(box const& other) const noexcept {
+			return other.pthis == this->pthis; 
+		}
 
 	private:
 		template<typename T>
-		void rebind() {
+		constexpr void rebind() {
 			rebind<T, base>();
 			if constexpr (requires (T & v) {
 				{ v.add_ref() } -> ::std::same_as<uint32_t>;
@@ -223,10 +223,10 @@ VKTL_EXPORT_ namespace vktl::detail {
 		}
 
 	private:
-		bool forbidden() const noexcept { return !(bool(add_ref_) ^ bool(release_)); }
+		constexpr bool forbidden() const noexcept { return !(bool(add_ref_) ^ bool(release_)); }
 
 		template<typename T, typename N>
-		void rebind() {
+		constexpr void rebind() {
 			if constexpr (!::std::same_as<N, vptr_base>) {
 				this->N::template rebind<T>();
 				this->rebind<T, typename N::base>();
@@ -238,7 +238,6 @@ VKTL_EXPORT_ namespace vktl::detail {
 		vfn<uint32_t()> release_ = nullptr;
 	};
 
-	// lefter type at topper of inheritance chain.
 	struct byte_view : ::std::span<const::std::byte> {
 		using base = span<const::std::byte>;
 
@@ -325,15 +324,37 @@ VKTL_EXPORT_ namespace vktl::vptr {
 		template<typename T>
 		void rebind() noexcept {
 			allocate_ = [](void* ptr, size_t size, size_t alignment) -> void* {
-				return static_cast<T*>(ptr)->allocate(size, alignment);
-				};
-			if constexpr (requires(T & value, void* ptr, size_t size, size_t alignment) {
-				{ value.reallocate(ptr, size, alignment) } -> ::std::convertible_to<void*>;
-			}) {
+				auto* self = static_cast<T*>(ptr);
+				if constexpr (requires { { self->allocate(size, std::align_val_t{ alignment }) } -> ::std::convertible_to<void*>; }) {
+					return self->allocate(size, std::align_val_t{ alignment });
+				}
+				else {
+					return self->allocate(size, alignment);
+				}
+			};
+
+			if constexpr (
+				requires(T & value, void* ptr, size_t size, size_t alignment) {
+					{ value.reallocate(ptr, size, alignment) } -> ::std::convertible_to<void*>;
+				} ||
+				requires(T & value, void* ptr, size_t size, std::align_val_t alignment) {
+					{ value.reallocate(ptr, size, alignment) } -> ::std::convertible_to<void*>;
+				}) {
 				reallocate_ = [](void* ptr, void* re, size_t size, size_t alignment) -> void* {
-					return static_cast<T*>(ptr)->reallocate(re, size, alignment);
-					};
+					auto* self = static_cast<T*>(ptr);
+
+					if constexpr (requires { { self->reallocate(re, size, std::align_val_t{ alignment }) } -> ::std::convertible_to<void*>; }) {
+						return self->reallocate(re, size, std::align_val_t{ alignment });
+					}
+					else {
+						return self->reallocate(re, size, alignment);
+					}
+				};
 			}
+			else {
+				reallocate_ = nullptr;
+			}
+
 			free_ = [](void* ptr, void* p) { static_cast<T*>(ptr)->free(p); };
 		}
 
@@ -400,11 +421,6 @@ VKTL_EXPORT_ namespace vktl {
 
 		// some of the object must contain at least one of these object.
 		// this describe task's type.
-
-		inline constexpr struct compute_ {} compute;
-		inline constexpr struct graphics_ {} graphics;
-		inline constexpr struct transfer_ {} transfer;
-		inline constexpr struct present_ {} present;
 
 		// for instance, it might use GET_PHYSICAL_DEVICE_2 and so on.
 		// required Vulkan 1.1.
@@ -477,23 +493,19 @@ VKTL_EXPORT_ namespace vktl {
 		inline constexpr struct customize_include_ {} customize_include {};
 	}
 	using shader_handle = detail::shader_handle_tag*;
-	// complier need device as parent.
+	// complier need instance as parent.
 	// should select atleast glsl or hlsl in inherit chain.
 	inline constexpr struct compiler_ {} compiler;
 #endif
 
 	// BEGIN EXECUTION.
 
-	namespace queue_duty {
-		using type = uint16_t;
-		inline constexpr type compute = 0x1 << 0;
-		inline constexpr type transfer = 0x1 << 1;
-		inline constexpr type graphics = 0x1 << 2;
-		inline constexpr type present = 0x1 << 3;
-	}
+
 	namespace execution_extensions {
 		using extensions::debug_named;
 		using extensions::allocate_from;
+
+		inline constexpr struct sync2_ {} sync2 {};
 	}
 	// execution is thread related.
 	// each queue will represent a thread.
@@ -522,11 +534,14 @@ VKTL_EXPORT_ namespace vktl {
 
 	namespace queue_extensions {
 		using extensions::debug_named;
+		inline constexpr struct graphics_ {} graphics{};
+		inline constexpr struct compute_ {} compute {};
+		inline constexpr struct transfer_ {} transfer{};
+		inline constexpr struct present_ {} present;
+		inline constexpr struct bind_sparse_ {} bind_sparse;
 	}
 	struct queue {
-		queue_duty::type duty;
-		// index of `device::queues`.
-		uint16_t family_index = 0u;
+		uint16_t family = 0u;
 		uint16_t index = 0u;
 	};
 
@@ -748,54 +763,6 @@ VKTL_EXPORT_ namespace vktl {
 	inline constexpr struct descriptor_allocator_ {} descriptor_allocator {};
 	using descriptor_handle = detail::descriptor_handle_tag*;
 
-	namespace resource_usage {
-		using resource_attrs::type;
-
-		inline constexpr type copy_src = 0x1u << 2;
-		inline constexpr type copy_dst = 0x1u << 3;
-
-		// some image or might need to mark read or write to identify more access usage.
-		// color and depth stencil are default by write operation, might need to combine read to identify as read operation.
-
-		inline constexpr type shader_read = 0x1u << 4;
-		inline constexpr type uniform = shader_read;
-		inline constexpr type gpu_read = shader_read;
-
-		inline constexpr type shader_write = 0x1u << 5;
-		inline constexpr type structured = shader_write;
-		inline constexpr type gpu_write = shader_write;
-
-		// both for buffer and image, image will view as image2D (no sampler).
-		inline constexpr type texel = 0x1u << 6;
-
-		// these values are not recommand to use this value on image,
-		// since only on uma structure might supported.
-
-		inline constexpr type readback = 0x1u << 7;
-		inline constexpr type cpu_read = readback;
-		inline constexpr type upload = 0x1u << 8;
-		inline constexpr type cpu_write = upload;
-
-		// buffer only.
-
-		inline constexpr type vertex = 0x1u << 9;
-		inline constexpr type index = 0x1u << 10; // index buffer.
-		inline constexpr type indirect = 0x1u << 11; // indirect command buffer.
-
-		// image only.
-
-		// this for internal usage. if need to speicified sampler, use image_view_extensions::sampled instead.
-		inline constexpr type sampled = 0x1u << 9;
-
-		inline constexpr type depth = 0x1u << 10;
-		inline constexpr type render_target = 0x1u << 11;
-		inline constexpr type color = render_target;
-		inline constexpr type input = 0x1u << 12; // input attachment.
-		inline constexpr type stencil = 0x1u << 13;
-		// only enabled if the extension `attachment` inside image_view.
-		inline constexpr type resolve = copy_dst;
-	}
-
 	// bindings.
 
 	namespace resource_view_extensions {
@@ -834,12 +801,10 @@ VKTL_EXPORT_ namespace vktl {
 		// mark the image view cannot use by region dependency.
 		struct frame_global {};
 	}
-	struct image_view {};
+	inline constexpr struct image_view_ {} image_view {};
 
 	struct uniform_buffer {
 		uint32_t index;
-		uint32_t set;
-		uint32_t binding;
 	};
 
 	struct attachment {
@@ -869,11 +834,24 @@ VKTL_EXPORT_ namespace vktl {
 	}
 
 	namespace resource_usage_extensions {
+		struct bind_on_set {
+			uint32_t set;
+			uint32_t binding;
+		};
+
+		// struct bind_on_buffer {
+		// 	// TODO:
+		// 	uint32_t offset;
+		// };
+
+		struct bind_on_heap {
+			uint64_t offset;
+		};
 	}
 	namespace pipe_extensions {
 		using extensions::debug_named;
-		using extensions::graphics_;
-		using extensions::compute_;
+		using extensions::graphics;
+		using extensions::compute;
 		// using extensions::use_existing;
 
 		struct pipe_bytes {
@@ -977,7 +955,9 @@ VKTL_EXPORT_ namespace vktl {
 		using extensions::graphics;
 		using extensions::compute;
 		using extensions::transfer;
+#if VKTL_HAVE_WINDOW
 		using extensions::present;
+#endif
 
 		inline constexpr struct render_pass_ {} render_pass;
 	}

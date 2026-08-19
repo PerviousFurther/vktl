@@ -1,9 +1,11 @@
 #pragma once
 
-// Interface style: swapchains compose a device and native window into a
-// frame scope inherited by resources, views, synchronization, and tasks.
-// Implementation: frame-aware handle storage selects either one inline handle
-// or an indexed array and centralizes Vulkan creation/destruction helpers.
+// --- Agents specification -------------------------------------------------
+// A swapchain is an independent frame host. It exposes one relocation-stable
+// frame scope identity shared by child objects and per-frame revisions used by
+// command invalidation. Successful recreation increments every affected frame;
+// allocation-only consumers continue to use `frame_index_source`.
+// --------------------------------------------------------------------------
 
 #if !defined(VKTL_NO_WINDOW)
 
@@ -36,6 +38,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 		{
 			frame_count_ = sw.min_frame_count;
 			frame_index_ = 0u;
+			frame_revisions_.resize(frame_count_, 1u);
 		}
 
 		~m() { reset(); }
@@ -43,6 +46,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 		template<typename Fn = ::std::nullptr_t>
 		void init(Fn&& fn = nullptr) {
 			N::init();
+			auto _ = locker_of(this);
 			if (!handle_) {
 				auto win = parent_of<window>(this);
 				auto dv = parent_of<device>(this);
@@ -95,6 +99,9 @@ VKTL_EXPORT_ namespace vktl::detail {
 				}
 				VK_ vkCreateSwapchainKHR(dv->handle(), &info, N::allocator(), &handle_.value)
 					| popup("[SWAPCHAIN] Create swapchain failure.");
+				if (frame_revisions_.size() != frame_count_) {
+					frame_revisions_.resize(frame_count_, 1u);
+				}
 
 				// invoke(images_, &VK_ vkGetSwapchainImagesKHR, hdv, handle_.value)
 				// 	| popup("[SWAPCHAIN] Cannot get_by swapchain images.");
@@ -103,13 +110,17 @@ VKTL_EXPORT_ namespace vktl::detail {
 		}
 
 		void reset() {
+			auto _ = locker_of(this);
 			if (handle_) {
-				VK_ vkDestroySwapchainKHR(handle_of<device>(this), handle_, N::allocator());
+				VK_ vkDestroySwapchainKHR(handle_of<device>(this),
+					::std::exchange(handle_.value, VK_NULL_HANDLE), N::allocator());
+				invalidate_frames();
 				// images_.clear();
 			}
 		}
 
 		constexpr auto handle() const noexcept { return handle_.value; }
+		constexpr auto surface() const noexcept { return info.surface; }
 
 		constexpr auto frame_count() const noexcept { return frame_count_; }
 		// constexpr auto image_count() const noexcept { return 1u; }
@@ -125,6 +136,15 @@ VKTL_EXPORT_ namespace vktl::detail {
 			return ensure_frame_index();
 		}
 
+		constexpr frame_scope_id frame_scope_identity() const noexcept {
+			return frame_scope_id_;
+		}
+
+		uint64_t frame_revision(uint32_t frame) const noexcept {
+			assert(frame < frame_revisions_.size());
+			return frame_revisions_[frame];
+		}
+
 		void fence(object_of<fence> auto& object) {
 			fence_ = {object};
 		}
@@ -134,10 +154,19 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 	private:
 		uint32_t frame_count_ = invalid, frame_index_ = invalid;
+		frame_scope_id frame_scope_id_ = allocate_frame_scope_id();
+		vector<uint64_t> frame_revisions_;
 		box<vptr::handle_owner<VK_ VkFence>> fence_;
 		copyable_if_null<VK_ VkSwapchainKHR> handle_{ VK_NULL_HANDLE };
 
 	private:
+		void invalidate_frames() noexcept {
+			for (auto& revision : frame_revisions_) {
+				++revision;
+				if (revision == 0u) ++revision;
+			}
+		}
+
 		uint16_t ensure_frame_index() const {
 			if (!fence_.empty()) {
 				if (auto handle = fence_.handle()) VKTL_LIKELY {

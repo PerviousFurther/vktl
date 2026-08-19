@@ -32,6 +32,9 @@
 # if __has_cpp_attribute(maybe_unused)
 #  define VKTL_MAYBE_UNUSED [[maybe_unused]]
 # endif
+# if __has_cpp_attribute(noreturn)
+#  define VKTL_NORETURN [[noreturn]]
+# endif
 #endif
 
 #if !defined(VKTL_NO_UNIQUE_ADDRESS)
@@ -49,6 +52,9 @@
 #if !defined(VKTL_MAYBE_UNUSED)
 # define VKTL_MAYBE_UNUSED
 #endif
+#if !defined(VKTL_NORETURN)
+# define VKTL_NORETURN
+#endif
 
 #if VKTL_HAVE_STD_
 # include <utility>
@@ -57,6 +63,8 @@
 # include <tuple>
 # include <type_traits>
 # include <concepts>
+// for align_val_t
+# include <new> 
 #endif
 
 #if !defined(assert)
@@ -91,6 +99,13 @@
 # include <algorithm>
 # include <atomic>
 # include <mutex>
+# include <thread>
+# include <condition_variable>
+# include <deque>
+
+# include <memory>
+
+# include <exception>
 # include <array>
 # include <ranges>
 # include <bit>
@@ -108,15 +123,21 @@ namespace VK_NAMESPACE {
 #include <vulkan/vulkan.h>
 }
 
+#if defined(VKTL_NO_WINDOW) || !defined(VK_KHR_surface)
+# define VKTL_HAVE_WINDOW 0
+#else
+# define VKTL_HAVE_WINDOW 1
+#endif
+
+
 #define forward_(x) ::std::forward<decltype(x)>(x)
 
 #include "detail/meta.hpp"
 #include "detail/utils.hpp"
 #include "detail/container.hpp"
 #include "detail/objects.hpp"
-
-
 #include "detail/common.hpp"
+#include "detail/frame_related.hpp"
 
 VKTL_EXPORT_ namespace vktl {
 	using detail::object;
@@ -128,21 +149,23 @@ VKTL_EXPORT_ namespace vktl {
 
 #include "detail/instance.hpp"
 
-#include "detail/window.hpp"
+#if VKTL_HAVE_WINDOW
+# include "detail/window.hpp"
+#endif
 #include "detail/device.hpp"
 #include "detail/compiler.hpp"
 #include "detail/pass.hpp"
-#include "detail/pipe.hpp"
 #include "detail/fence.hpp"
 #include "detail/event.hpp"
 #include "detail/semaphore.hpp"
-
-#include "detail/swapchain.hpp"
+#if VKTL_HAVE_WINDOW
+# include "detail/swapchain.hpp"
+#endif
 #include "detail/resource.hpp"
 #include "detail/buffer.hpp"
 #include "detail/image.hpp"
 #include "detail/descriptor.hpp"
-#include "detail/descriptor_set.hpp"
+#include "detail/bind_set.hpp"
 #include "detail/sampler.hpp"
 #include "detail/execution.hpp"
 #include "detail/task.hpp"

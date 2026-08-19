@@ -57,7 +57,7 @@ VKTL_EXPORT_ namespace vktl::vptr {
 		using base = apply_compose<C,
 			bindable<detail::bind_memory>,
 			handle_owner<detail::locked<handle_type>>,
-			frame_related>;
+			frame_index_source>;
 
 		template<typename C>
 		struct apply : base<C> {
@@ -1207,8 +1207,8 @@ VKTL_EXPORT_ namespace vktl::detail {
 	using namespace resource_extensions;
 
 	template<typename N, typename Trait>
-	struct basic_resource : basic_frame_related_handle<N, Trait> {
-		using base = basic_frame_related_handle<N, Trait>;
+	struct basic_resource : basic_frame_indexed_handle<N, Trait> {
+		using base = basic_frame_indexed_handle<N, Trait>;
 		using handle_type = typename Trait::handle_type;
 
 		basic_resource(auto&&...others)

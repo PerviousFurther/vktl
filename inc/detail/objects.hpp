@@ -55,9 +55,20 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 	template<typename T>
 	struct express;
+	template<typename T>
+	struct skip;
+	template<typename T>
+	struct ignore;
 
 	template<typename T>
 	concept can_express = ::std::default_initializable<express<T>>;
+	template<typename T>
+	concept can_skip = ::std::default_initializable<skip<T>>;
+	template<typename T>
+	concept can_ignore = ::std::default_initializable<ignore<T>>;
+
+	template<typename T>
+	concept on_chain = !can_express<T> && !can_skip<T> && !can_ignore<T>;
 
 	template<typename State, typename Types>
 	struct c;
@@ -72,7 +83,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 		template<typename First, typename...Args>
 		constexpr c(First&& first, Args&&...infos)
-			requires(!can_express<::std::remove_cvref_t<First>>)
+			requires(on_chain<::std::remove_cvref_t<First>>)
 		: base{ forward_(first), forward_(infos)... }
 		{
 		}
@@ -81,7 +92,19 @@ VKTL_EXPORT_ namespace vktl::detail {
 		constexpr c(Ignored&& first, Args&&...infos)
 			requires(can_express<::std::remove_cvref_t<Ignored>>)
 		: c(forward_(infos)...) {
-			express<::std::remove_cvref_t<Ignored>>::invoke(forward_(first), static_cast<base&>(*this));
+			express<::std::remove_cvref_t<Ignored>>::invoke(forward_(first), *this);
+		}
+
+		template<typename Ignored, typename...Args>
+		constexpr c(Ignored&& first, Args&&...infos)
+			requires(can_skip<::std::remove_cvref_t<Ignored>>)
+			: c(forward_(first), forward_(infos)...) {
+		}
+
+		template<typename Ignored, typename...Args>
+		constexpr c(Ignored&&, Args&&...infos)
+			requires(can_ignore<::std::remove_cvref_t<Ignored>>)
+			: c(forward_(infos)...) {
 		}
 	};
 	template<size_t index, typename Types>
@@ -170,7 +193,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 	};
 
 	template<typename...Cs, typename C, typename First, typename...Args>
-		requires(!can_express<First>)
+		requires(on_chain<First>)
 	struct ob_<b<C, Cs...>, First, Args...> : ob_<b<C, First, Cs...>, Args...> {
 		using next = ob_<b<C, First, Cs...>, Args...>;
 		using first = First;
@@ -182,7 +205,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 		}
 	};
 	template<typename...Cs, typename First, typename...Args>
-		requires(can_express<First>)
+		requires(!on_chain<First>)
 	struct ob_<b<Cs...>, First, Args...> : ob_<b<Cs...>, Args...> {
 		using next = ob_<b<Cs...>, Args...>;
 
@@ -259,8 +282,11 @@ VKTL_EXPORT_ namespace vktl::detail {
 		template<typename...Args>
 			requires(((tuple_specialization_of<Args, object> || tuple_specialization_of<Args, s_> || is_host<Args>::value || extensions_tag<Args>) && ...))
 		constexpr object(Args&&...args)
-			: object{ T::make_tuple(static_cast<Args&&>(args)...) }
-		{ /*base::relocate();*/ }
+			: object{ T::make_tuple(static_cast<Args&&>(args)...) } { 
+			if constexpr (requires{ base::finalize(); }) {
+				base::finalize();
+			}
+		}
 
 		constexpr object(object const& object) requires(::std::copy_constructible<base>)
 			: base{ static_cast<base const&>(object) } {

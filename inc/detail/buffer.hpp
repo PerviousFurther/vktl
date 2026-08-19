@@ -1,5 +1,12 @@
 #pragma once
 
+// --- Agents specification -------------------------------------------------
+// Buffer views upload pass-declared creation usage through
+// `parent_of<buffer>(this)` when bound. The buffer exposes this focused
+// operation publicly; access-state and barrier insertion remain separate
+// future work.
+// --------------------------------------------------------------------------
+
 // Interface style: buffer and buffer-view descriptors compose resource
 // ownership, memory binding, mapping, and descriptor-view behavior.
 // Implementation: Vulkan operations are selected through compact traits while
@@ -54,6 +61,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 		using type = buffer_view_;
 		using host = buffer;
 		using handle_type = VK_ VkBufferView;
+		using view_type = handle_type;
 		using create_info_type = VK_ VkBufferViewCreateInfo;
 		using create_flags_bits_type = VK_ VkBufferViewCreateFlags;
 		using subresource_range = range<VK_ VkDeviceSize>;
@@ -81,16 +89,22 @@ VKTL_EXPORT_ namespace vktl::detail {
 		void init() {
 			N::init();
 			auto _ = locker_of(this);
-			if (!base::is_null()) {
+			if (base::is_null()) {
 				this->generate(info, "[BUFFER] Create buffer failure.");
 			}
 		}
 
 		void reset() {
 			auto _ = locker_of(this);
-			if (base::is_null()) {
+			if (!base::is_null()) {
 				this->destroy();
 			}
+		}
+
+		void append_usage(VK_ VkBufferUsageFlags usages) noexcept {
+			auto _ = locker_of(this);
+			assert(base::is_null());
+			info.usage |= usages;
 		}
 
 		VK_ VkMemoryBarrier append_access(default_buffer_access const& access) {
@@ -111,6 +125,11 @@ VKTL_EXPORT_ namespace vktl::detail {
 	struct m<buffer_view_, N> : N {
 		constexpr m(buffer_view_ buffer_view, auto&&...others)
 			: N{ forward_(others)... }
+			, info{
+				.sType = VK_ VK_STRUCTURE_TYPE_BUFFER_VIEW_CREATE_INFO,
+				.offset = 0u,
+				.range = maximum,
+			}
 		{
 		}
 
@@ -148,13 +167,27 @@ VKTL_EXPORT_ namespace vktl::detail {
 		// 
 		// }
 
-		auto handle() const noexcept { return handle_of<buffer>(this); }
-		auto view() const noexcept { return handle_.value; }
+		uint32_t frame_count() const noexcept {
+			return parent_of<buffer>(this)->frame_count();
+		}
+		auto handle(uint32_t frame) const noexcept {
+			auto value = parent_of<buffer>(this)->handle(frame);
+			return value.value;
+		}
+		auto handle() const noexcept { return handle(parent_of<buffer>(this)->frame_index()); }
+		auto view(uint32_t) const noexcept { return handle_.value; }
+		auto view() const noexcept { return view(0u); }
+		auto layout() const noexcept { return nullptr; }
+		auto subresource_range() const noexcept {
+			return range<VK_ VkDeviceSize>{ info.offset, info.range };
+		}
+
+		void upload_usage(VK_ VkBufferUsageFlags usages) {
+			parent_of<buffer>(this)->append_usage(usages);
+		}
 
 	protected:
-		VK_ VkBufferViewCreateInfo info{ 
-			.sType = VK_ VK_STRUCTURE_TYPE_BUFFER_VIEW_CREATE_INFO 
-		};
+		VK_ VkBufferViewCreateInfo info;
 
 	private:
 		reset_if_copy<VK_ VkBufferView> handle_;

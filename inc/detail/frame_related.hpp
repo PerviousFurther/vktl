@@ -1,14 +1,26 @@
 #pragma once
 
+// --- Agents specification -------------------------------------------------
+// `frame_index_source` and `basic_frame_indexed*` provide allocation
+// multiplicity only. `frame_related` is the separate command-invalidation
+// capability and carries a relocation-stable scope ID plus per-frame revision.
+// Independent frame hosts must never share an ID because their counts match.
+// --------------------------------------------------------------------------
+
 VKTL_EXPORT_ namespace vktl::detail {
 
 	struct frame_scope; // tag for frame related objects.
 
+	inline frame_scope_id allocate_frame_scope_id() noexcept {
+		static ::std::atomic<frame_scope_id> next{ 1u };
+		return next.fetch_add(1u, ::std::memory_order_relaxed);
+	}
+
 	template<typename N>
-	struct basic_frame_related : N {
+	struct basic_frame_indexed : N {
 		static constexpr auto have_frame_scope = parent_have<N, frame_scope>;
 
-		basic_frame_related(auto&&...others)
+		basic_frame_indexed(auto&&...others)
 			: N{ forward_(others)... }
 		{
 		}
@@ -27,8 +39,18 @@ VKTL_EXPORT_ namespace vktl::detail {
 				return parent_of<frame_scope>(this)->frame_index();
 			}
 			else {
-				return 1u;
+				return 0u;
 			}
+		}
+
+		constexpr frame_scope_id frame_scope_identity() const noexcept
+			requires(have_frame_scope) {
+			return parent_of<frame_scope>(this)->frame_scope_identity();
+		}
+
+		constexpr uint64_t frame_revision(uint32_t frame) const noexcept
+			requires(have_frame_scope) {
+			return parent_of<frame_scope>(this)->frame_revision(frame);
 		}
 	};
 
@@ -36,27 +58,27 @@ VKTL_EXPORT_ namespace vktl::detail {
 	// helper classes.
 
 	template<typename N, typename Trait>
-	struct basic_frame_related_handle : basic_frame_related<N> {
-		using base = basic_frame_related<N>;
+	struct basic_frame_indexed_handle : basic_frame_indexed<N> {
+		using base = basic_frame_indexed<N>;
 		using handle_type = typename Trait::handle_type;
 
-		basic_frame_related_handle(auto&&...others)
+		basic_frame_indexed_handle(auto&&...others)
 			: base{ forward_(others)... } {
 			construct_handles();
 		}
 
-		basic_frame_related_handle(basic_frame_related_handle const&) {
+		basic_frame_indexed_handle(basic_frame_indexed_handle const&) {
 			construct_handles();
 		}
 
-		basic_frame_related_handle& operator=(basic_frame_related_handle const& other) {
+		basic_frame_indexed_handle& operator=(basic_frame_indexed_handle const& other) {
 			assert(is_null());
 			if constexpr (!base::have_frame_scope) {
 				handles_ = other.handles_;
 			}
 		}
 
-		basic_frame_related_handle(basic_frame_related_handle&& other) {
+		basic_frame_indexed_handle(basic_frame_indexed_handle&& other) {
 			if constexpr (base::have_frame_scope) {
 				handles_ = ::std::exchange(other.handles_, nullptr);
 			}
@@ -65,7 +87,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 			}
 		}
 
-		basic_frame_related_handle& operator=(basic_frame_related_handle&& other) {
+		basic_frame_indexed_handle& operator=(basic_frame_indexed_handle&& other) {
 			assert(is_null());
 			if constexpr (base::have_frame_scope) {
 				if constexpr (::std::is_trivially_copyable_v<handle_type>) {
@@ -83,7 +105,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 			}
 		}
 
-		~basic_frame_related_handle() {
+		~basic_frame_indexed_handle() {
 			if constexpr (base::have_frame_scope) {
 				delete[] handles_;
 			}
@@ -112,7 +134,8 @@ VKTL_EXPORT_ namespace vktl::detail {
 		}
 
 	protected:
-		void generate(auto const& info, const char* error) requires(requires { Trait::create; }) {
+		void generate(auto const& info, const char* error) 
+			requires(requires { Trait::create; }) {
 			if constexpr (base::have_frame_scope) {
 				uint32_t frame_count = base::frame_count();
 				for (auto i = 0u; i < frame_count; i++) try {
@@ -139,6 +162,10 @@ VKTL_EXPORT_ namespace vktl::detail {
 			else {
 				Trait::destroy(handle_of<device>(this), handles_, N::allocator());
 			}
+		}
+
+		auto handles() const noexcept { 
+			return::std::span{ handles_, this->frame_count() }; 
 		}
 
 	private:
@@ -173,7 +200,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 VKTL_EXPORT_ namespace vktl::vptr {
 
-	struct frame_related {
+	struct frame_index_source {
 		template<typename C>
 		struct apply;
 		
@@ -182,7 +209,7 @@ VKTL_EXPORT_ namespace vktl::vptr {
 	};
 
 	template<typename C>
-	struct frame_related::apply : C {
+	struct frame_index_source::apply : C {
 		using base = C;
 
 		template<typename T>
@@ -202,6 +229,54 @@ VKTL_EXPORT_ namespace vktl::vptr {
 		}
 		uint32_t frame_count() const noexcept {
 			return vptr_.frame_count_(C::get_this());
+		}
+
+		frame_index_source vptr_;
+	};
+
+	struct frame_related {
+		template<typename C>
+		struct apply;
+
+		vfn<frame_scope_id() const noexcept> frame_scope_ = nullptr;
+		vfn<uint32_t() const noexcept> frame_index_ = nullptr;
+		vfn<uint32_t() const noexcept> frame_count_ = nullptr;
+		vfn<uint64_t(uint32_t) const noexcept> frame_revision_ = nullptr;
+	};
+
+	template<typename C>
+	struct frame_related::apply : C {
+		using base = C;
+
+		template<typename T>
+		void rebind() noexcept {
+			vptr_ = {
+				.frame_scope_ = [](void const* ptr) noexcept {
+					return static_cast<T const*>(ptr)->frame_scope_identity();
+				},
+				.frame_index_ = [](void const* ptr) noexcept {
+					return static_cast<T const*>(ptr)->frame_index();
+				},
+				.frame_count_ = [](void const* ptr) noexcept {
+					return static_cast<T const*>(ptr)->frame_count();
+				},
+				.frame_revision_ = [](void const* ptr, uint32_t frame) noexcept {
+					return static_cast<T const*>(ptr)->frame_revision(frame);
+				},
+			};
+		}
+
+		frame_scope_id frame_scope_identity() const noexcept {
+			return vptr_.frame_scope_(C::get_this());
+		}
+		uint32_t frame_index() const noexcept {
+			return vptr_.frame_index_(C::get_this());
+		}
+		uint32_t frame_count() const noexcept {
+			return vptr_.frame_count_(C::get_this());
+		}
+		uint64_t frame_revision(uint32_t frame) const noexcept {
+			return vptr_.frame_revision_(C::get_this(), frame);
 		}
 
 		frame_related vptr_;

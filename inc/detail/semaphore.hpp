@@ -16,18 +16,20 @@ VKTL_EXPORT_ namespace vktl::detail {
 		~m() { reset(); }
 
 		void init() {
-			if (handle_) {
-				N::init();
+			N::init();
+			auto _ = locker_of(this);
+			if (!handle_) {
 				VK_ vkCreateSemaphore(
-					handle_of<N, device>(), &info,
-					N::allocator(), &handle_) | popup{ "[SEMAPHORE] Create semaphore failure." };
+					handle_of<device>(this), &info,
+					N::allocator(), &handle_.value) | popup{ "[SEMAPHORE] Create semaphore failure." };
 			}
 		}
 
 		void reset() noexcept {
+			auto _ = locker_of(this);
 			if (handle_) {
 				VK_ vkDestroySemaphore(
-					handle_of<N, device>(), handle_,
+					handle_of<device>(this), ::std::exchange(handle_.value, VK_NULL_HANDLE),
 					N::allocator());
 			}
 		}

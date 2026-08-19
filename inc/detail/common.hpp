@@ -526,9 +526,13 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 		constexpr VK_ VkAllocationCallbacks const* allocator() const { return &callbacks_; }
 
+	protected:
+		constexpr auto& allocator_impl() noexcept { return allocator_; }
+
 	private:
 		allocator_type allocator_;
 		VK_ VkAllocationCallbacks callbacks_;
 	};
+
 }
 

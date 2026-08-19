@@ -166,9 +166,16 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 			if (size_ == 0u) {
 				reset_sentinel();
+			} else {
+				root_.next->prev = &root_;
+				root_.prev->next = &root_;
 			}
+			
 			if (other.size_ == 0u) {
 				other.reset_sentinel();
+			} else {
+				other.root_.next->prev = &other.root_;
+				other.root_.prev->next = &other.root_;
 			}
 		}
 
@@ -191,48 +198,274 @@ VKTL_EXPORT_ namespace vktl::detail {
 		size_type size_ = 0u;
 	};
 
-	// if defined VK_DEFINE_HANDLE to customize vulkan's handle, 
-	// you need to specialize this to enable customize vulkan handle.
 
+	template<typename...Ts>
+	struct vectors;
+
+	template<typename...Ts>
+	struct spans {
+		static_assert(sizeof...(Ts) > 0, "multispan requires at least one type.");
+
+		using types = ts<Ts...>;
+		using size_type = ::std::size_t;
+		using difference_type = ::std::ptrdiff_t;
+
+		template<size_type I> using element_t = tuple_at_t<I, types>;
+		static constexpr size_type num_types = sizeof...(Ts);
+
+		constexpr spans() noexcept = default;
+		constexpr spans(const spans&) noexcept = default;
+		constexpr spans& operator=(const spans&) noexcept = default;
+
+		// ---- adopt raw pointers -------------------------------------------------
+		constexpr spans(size_type count, Ts*... pointers) noexcept
+			: pointers_{ pointers... }, size_(count) {
+		}
+
+		// ---- adopt N contiguous containers (vector, array, span, C array, ...) ---
+		template<typename... Rs>
+			requires(sizeof...(Rs) == num_types
+			&& (!::std::same_as<::std::remove_cvref_t<Rs>, spans> && ...)
+			&& (::std::ranges::contiguous_range<Rs> && ...)
+			&& (::std::ranges::sized_range<Rs> && ...)
+			&& (::std::convertible_to<::std::ranges::range_value_t<::std::remove_reference_t<Rs>>(*)[], Ts(*)[]> && ...))
+			constexpr explicit spans(Rs&&... ranges)
+			: pointers_{ ::std::ranges::data(ranges)... }
+			, size_(::std::min({ size_type(::std::ranges::size(ranges))... })) {
+		}
+
+		// ---- adopt a multivec ---------------------------------------------------
+		template<typename... Us>
+			requires(sizeof...(Us) == num_types && (::std::convertible_to<Us(*)[], Ts(*)[]> && ...))
+		constexpr spans(vectors<Us...>& owner) noexcept { adopt(owner); }
+
+		template<typename... Us>
+			requires(sizeof...(Us) == num_types && (::std::convertible_to<const Us(*)[], Ts(*)[]> && ...))
+		constexpr spans(const vectors<Us...>& owner) noexcept { adopt(owner); }
+
+		// ---- qualification conversion: spans<T...> -> spans<const T...> ---------
+		template<typename... Us>
+			requires(sizeof...(Us) == num_types 
+			&& !(::std::same_as<Us, Ts> && ...)
+			&& (::std::convertible_to<Us(*)[], Ts(*)[]> && ...))
+			constexpr spans(const spans<Us...>& other) noexcept : size_(other.size()) {
+			[&] <size_type... Is>(::std::index_sequence<Is...>) {
+				pointers_ = ::std::tuple<Ts*...>{ other.template data<Is>()... };
+			}(::std::index_sequence_for<Ts...>{});
+		}
+
+		constexpr void swap(spans& other) noexcept {
+			::std::swap(pointers_, other.pointers_);
+			::std::swap(size_, other.size_);
+		}
+
+		VKTL_NODISCARD constexpr size_type size() const noexcept { return size_; }
+		VKTL_NODISCARD constexpr bool empty() const noexcept { return size_ == 0; }
+		VKTL_NODISCARD constexpr size_type size_bytes() const noexcept { return (size_ * sizeof(Ts) + ...); }
+
+		template<size_type I>
+		VKTL_NODISCARD constexpr element_t<I>* data() const noexcept { return ::std::get<I>(pointers_); }
+		template<typename T>
+		VKTL_NODISCARD constexpr auto data() const noexcept { return data<type_index<T>()>(); }
+
+		template<size_type I>
+		VKTL_NODISCARD constexpr element_t<I>& get(size_type index) const noexcept { assert(index < size_); return data<I>()[index]; }
+		template<typename T>
+		VKTL_NODISCARD constexpr auto& get(size_type index) const noexcept { return get<type_index<T>()>(index); }
+
+		template<size_type I>
+		VKTL_NODISCARD constexpr auto column() const noexcept { return ::std::span{ data<I>(), size_ }; }
+		template<typename T>
+		VKTL_NODISCARD constexpr auto column() const noexcept { return column<type_index<T>()>(); }
+		template<size_type I>
+		VKTL_NODISCARD constexpr auto get_span() const noexcept { return column<I>(); }
+
+		VKTL_NODISCARD constexpr ::std::tuple<Ts&...> row(size_type index) const {
+			assert(index < size_);
+			return row_tuple(index, ::std::index_sequence_for<Ts...>{});
+		}
+		VKTL_NODISCARD constexpr ::std::tuple<Ts&...> operator[](size_type index) const { return row(index); }
+		VKTL_NODISCARD constexpr ::std::tuple<Ts&...> front() const { assert(size_); return row(0u); }
+		VKTL_NODISCARD constexpr ::std::tuple<Ts&...> back() const { assert(size_); return row(size_ - 1u); }
+
+		// ---- sub-views ----------------------------------------------------------
+		VKTL_NODISCARD constexpr spans subspan(size_type offset, size_type count = static_cast<size_type>(-1)) const noexcept {
+			assert(offset <= size_);
+			const auto n = ::std::min(count, size_ - offset);
+			return[&] <size_type... Is>(::std::index_sequence<Is...>) {
+				return spans{ n, (data<Is>() + offset)... };
+			}(::std::index_sequence_for<Ts...>{});
+		}
+		VKTL_NODISCARD constexpr spans first(size_type count) const noexcept { return subspan(0, count); }
+		VKTL_NODISCARD constexpr spans last(size_type count) const noexcept { assert(count <= size_); return subspan(size_ - count, count); }
+		VKTL_NODISCARD constexpr spans<const Ts...> as_const() const noexcept { return spans<const Ts...>{ *this }; }
+
+		VKTL_NODISCARD constexpr bool operator==(const spans& other) const
+			requires((::std::equality_comparable<::std::remove_const_t<Ts>> && ...)) {
+			if (other.size_ != size_) { return false; }
+			for (size_type i = 0; i < size_; ++i) {
+				const bool equal = [&] <size_type... Is>(::std::index_sequence<Is...>) {
+					return ((get<Is>(i) == other.template get<Is>(i)) && ...);
+				}(::std::index_sequence_for<Ts...>{});
+				if (!equal) { return false; }
+			}
+			return true;
+		}
+
+	private:
+		class row_iterator {
+		public:
+			using iterator_category = ::std::random_access_iterator_tag;
+			using difference_type = ::std::ptrdiff_t;
+			using value_type = ::std::tuple<Ts&...>;
+			using reference = value_type;
+
+			constexpr row_iterator() = default;
+			constexpr row_iterator(spans view, size_type index) noexcept : view_(view), index_(index) {}
+
+			template<size_type I = 0u>
+			constexpr auto& get() const { return view_.template get<I>(index_); }
+
+			constexpr value_type operator*() const { return view_.row(index_); }
+			constexpr value_type operator[](difference_type offset) const { return view_.row(index_ + offset); }
+
+			constexpr row_iterator& operator++() { ++index_; return *this; }
+			constexpr row_iterator operator++(int) { auto copy = *this; ++*this; return copy; }
+			constexpr row_iterator& operator--() { --index_; return *this; }
+			constexpr row_iterator operator--(int) { auto copy = *this; --*this; return copy; }
+			constexpr row_iterator& operator+=(difference_type offset) { index_ += offset; return *this; }
+			constexpr row_iterator& operator-=(difference_type offset) { index_ -= offset; return *this; }
+			constexpr row_iterator operator+(difference_type offset) const { auto copy = *this; return copy += offset; }
+			constexpr row_iterator operator-(difference_type offset) const { auto copy = *this; return copy -= offset; }
+			friend constexpr row_iterator operator+(difference_type offset, row_iterator self) { return self += offset; }
+			constexpr difference_type operator-(const row_iterator& other) const {
+				return static_cast<difference_type>(index_) - static_cast<difference_type>(other.index_);
+			}
+
+			constexpr bool operator==(const row_iterator& other) const { return index_ == other.index_; }
+			constexpr auto operator<=>(const row_iterator& other) const { return index_ <=> other.index_; }
+
+			VKTL_NODISCARD constexpr size_type index() const noexcept { return index_; }
+
+		private:
+			spans view_{};
+			size_type index_ = 0;
+		};
+
+	public:
+		// element constness lives in Ts, so a span view has a single iterator flavour
+		using iterator = row_iterator;
+		using const_iterator = row_iterator;
+
+		VKTL_NODISCARD constexpr iterator begin() const noexcept { return { *this, 0 }; }
+		VKTL_NODISCARD constexpr iterator end() const noexcept { return { *this, size_ }; }
+		VKTL_NODISCARD constexpr const_iterator cbegin() const noexcept { return begin(); }
+		VKTL_NODISCARD constexpr const_iterator cend() const noexcept { return end(); }
+
+	private:
+		template<typename T>
+		static consteval size_type type_index() noexcept { return find_if_same_v<T, types>; }
+
+		template<size_type... Is>
+		constexpr auto row_tuple(size_type index, ::std::index_sequence<Is...>) const { return ::std::tie(get<Is>(index)...); }
+
+		template<typename Owner>
+		constexpr void adopt(Owner& owner) noexcept {
+			[&] <size_type... Is>(::std::index_sequence<Is...>) {
+				pointers_ = ::std::tuple<Ts*...>{ owner.template data<Is>()... };
+			}(::std::index_sequence_for<Ts...>{});
+			size_ = owner.size();
+		}
+
+		template<typename...> friend struct spans;
+
+		::std::tuple<Ts*...> pointers_{};
+		size_type size_ = 0;
+	};
 
 	template<typename...Ts>
 	struct vectors {
 		static_assert(sizeof...(Ts) > 0, "multivec requires at least one type.");
+
 		using types = ts<Ts...>;
-		using size_type = size_t;
+		using size_type = ::std::size_t;
 		using byte = ::std::byte;
 
+		using view_type = spans<Ts...>;
+		using const_view_type = spans<const Ts...>;
+		using iterator = typename view_type::iterator;
+		using const_iterator = typename const_view_type::iterator;
+
 		constexpr vectors() = default;
-		explicit vectors(size_type size) requires((::std::default_initializable<Ts> && ...)) { resize(size); }
+		explicit vectors(size_type size) 
+			requires((::std::default_initializable<Ts> && ...)) { resize(size); }
 		template<typename... Args>
 			requires(sizeof...(Args) == sizeof...(Ts) && (::std::constructible_from<Ts, const Args&> && ...))
-		explicit vectors(size_type size, const Args&... values) { resize(size, values...); }
+		explicit vectors(size_type size, Args const&...values) { resize(size, values...); }
 
-		~vectors() { clear(); deallocate_buffer(); }
+		~vectors() { clear(); this->deallocate_buffer(); }
+
 		vectors(const vectors& other) { reserve(other.size_); copy_construct_from(other); }
 		vectors& operator=(const vectors& other) { if (this != &other) { auto tmp = other; swap(tmp); } return *this; }
 		vectors(vectors&& other) noexcept { swap(other); }
 		vectors& operator=(vectors&& other) noexcept { if (this != &other) { clear(); deallocate_buffer(); swap(other); } return *this; }
 
-		void swap(vectors& other) noexcept { ::std::swap(buffer_, other.buffer_); ::std::swap(size_, other.size_); ::std::swap(capacity_, other.capacity_); }
+		void swap(vectors& other) noexcept {
+			::std::swap(buffer_, other.buffer_);
+			::std::swap(size_, other.size_);
+			::std::swap(capacity_, other.capacity_);
+		}
+
 		VKTL_NODISCARD size_type size() const noexcept { return size_; }
 		VKTL_NODISCARD size_type capacity() const noexcept { return capacity_; }
 		VKTL_NODISCARD bool empty() const noexcept { return size_ == 0; }
 
-		void reserve(size_type new_cap) {
-			if (new_cap <= capacity_) return;
-			reallocate(new_cap);
+		// ---- the view is now the single source of truth for element access ------
+		VKTL_NODISCARD view_type view() noexcept { return raw_view().first(size_); }
+		VKTL_NODISCARD const_view_type view() const noexcept { return const_view_type{ raw_view().first(size_) }; }
+		operator view_type() noexcept { return view(); }
+		operator const_view_type() const noexcept { return view(); }
+
+		template<size_type I> VKTL_NODISCARD auto* data() noexcept { return raw_view().template data<I>(); }
+		template<size_type I> VKTL_NODISCARD const auto* data() const noexcept { return raw_view().template data<I>(); }
+
+		template<size_type I> VKTL_NODISCARD auto& get(size_type i) noexcept { return view().template get<I>(i); }
+		template<size_type I> VKTL_NODISCARD const auto& get(size_type i) const noexcept { return view().template get<I>(i); }
+		template<typename T> VKTL_NODISCARD T& get(size_type i) noexcept { return view().template get<type_index<T>()>(i); }
+		template<typename T> VKTL_NODISCARD const T& get(size_type i) const noexcept { return view().template get<type_index<T>()>(i); }
+
+		template<size_type I> VKTL_NODISCARD auto column() noexcept { return view().template column<I>(); }
+		template<size_type I> VKTL_NODISCARD auto column() const noexcept { return view().template column<I>(); }
+		template<size_type I> VKTL_NODISCARD auto get_span() noexcept { return column<I>(); }
+		template<size_type I> VKTL_NODISCARD auto get_span() const noexcept { return column<I>(); }
+
+		VKTL_NODISCARD::std::tuple<Ts&...> row(size_type i) { return view().row(i); }
+		VKTL_NODISCARD::std::tuple<Ts const&...> row(size_type i) const { return view().row(i); }
+		VKTL_NODISCARD::std::tuple<Ts&...> front() { return view().front(); }          // was duplicated + const
+		VKTL_NODISCARD::std::tuple<Ts const&...> front() const { return view().front(); }
+		VKTL_NODISCARD::std::tuple<Ts&...> back() { return view().back(); }
+		VKTL_NODISCARD::std::tuple<Ts const&...> back() const { return view().back(); }
+
+		VKTL_NODISCARD iterator begin() noexcept { return { view(), 0 }; }
+		VKTL_NODISCARD iterator end() noexcept { return { view(), size_ }; }
+		VKTL_NODISCARD const_iterator begin() const noexcept { return { view(), 0 }; }
+		VKTL_NODISCARD const_iterator end() const noexcept { return { view(), size_ }; }
+		VKTL_NODISCARD const_iterator cbegin() const noexcept { return begin(); }
+		VKTL_NODISCARD const_iterator cend() const noexcept { return end(); }
+
+		bool operator==(const vectors& other) const noexcept
+			requires((::std::equality_comparable<Ts> && ...)) {
+			return this == &other || view() == other.view();
 		}
+
+		void reserve(size_type new_cap) { if (new_cap > capacity_) reallocate(new_cap); }
 
 		template<typename... Args>
 			requires(sizeof...(Args) == sizeof...(Ts) && (::std::constructible_from<Ts, Args&&> && ...))
 		void emplace_back(Args&&... args) { emplace(end(), static_cast<Args&&>(args)...); }
-		void push_back(const Ts&... args)
-			requires((::std::copy_constructible<Ts> && ...)) { emplace_back(args...); }
-		void push_back(Ts&&... args)
-			requires((::std::move_constructible<Ts> && ...)) { emplace_back(::std::move(args)...); }
-
-		void pop_back() noexcept((::std::is_nothrow_destructible_v<Ts> && ...)) { assert(!empty()); destroy_row(--size_); }
+		void push_back(const Ts&... args) requires((::std::copy_constructible<Ts> && ...)) { emplace_back(args...); }
+		void push_back(Ts&&... args) requires((::std::move_constructible<Ts> && ...)) { emplace_back(::std::move(args)...); }
+		void pop_back() noexcept { assert(!empty()); destroy_row(--size_); }
 
 		void resize(size_type new_size) requires((::std::default_initializable<Ts> && ...)) {
 			if (new_size < size_) { shrink_to(new_size); return; }
@@ -246,120 +479,15 @@ VKTL_EXPORT_ namespace vktl::detail {
 			reserve(new_size);
 			while (size_ < new_size) { emplace_back(values...); }
 		}
-
 		void clear() noexcept { shrink_to(0); }
-
-		template<size_type I>
-		tuple_at_t<I, types>& get(size_type index) noexcept { assert(index < size_); return data<I>()[index]; }
-		template<size_type I>
-		const tuple_at_t<I, types>& get(size_type index) const noexcept { assert(index < size_); return data<I>()[index]; }
-
-		template<typename T>
-		T& get(size_type index) noexcept { return get<type_index<T>()>(index); }
-
-		template<typename T>
-		const T& get(size_type index) const noexcept { return get<type_index<T>()>(index); }
-
-		template<size_type I>
-		auto column() noexcept { return ::std::span{ data<I>(), size_ }; }
-		template<size_type I>
-		auto column() const noexcept { return ::std::span{ data<I>(), size_ }; }
-
-		template<size_type I>
-		auto get_span() noexcept { return column<I>(); }
-		template<size_type I>
-		auto get_span() const noexcept { return column<I>(); }
-
-		::std::tuple<Ts&...> row(size_type index) { assert(index < size_); return row_tuple(index, ::std::index_sequence_for<Ts...>{}); }
-		::std::tuple<Ts const&...> row(size_type index) const { assert(index < size_); return row_tuple(index, ::std::index_sequence_for<Ts...>{}); }
-
-		bool operator==(vectors const& other) const noexcept requires(((::std::equality_comparable<Ts>) &&...)) {
-			if (&other == this) {
-				return true;
-			}
-			if (other.size() != this->size()) {
-				return false;
-			}
-			for (auto i = 0u; i < size_; i++) {
-				if (!::std::apply(
-					[](auto const& left, auto const& right) {
-						return left == right;
-					}, ::std::forward_as_tuple(other.row(i), this->row(i)))) {
-					return false;
-				}
-			}
-			return true;
-		}
-
-	private:
-		template<bool is_const>
-		class row_iterator {
-			template<bool> friend class row_iterator;
-			using owner_type = ::std::conditional_t<is_const, const vectors, vectors>;
-		public:
-			using iterator_category = ::std::random_access_iterator_tag;
-			using difference_type = ::std::ptrdiff_t;
-			using value_type = ::std::tuple<::std::conditional_t<is_const, Ts const&, Ts&>...>;
-
-			constexpr row_iterator() = default;
-			constexpr row_iterator(owner_type* owner, size_type index) : owner_(owner), index_(index) {}
-			constexpr row_iterator(const row_iterator<false>& other) requires(is_const) : owner_(other.owner_), index_(other.index_) {}
-			constexpr row_iterator(const row_iterator&) = default;
-
-			template<::std::size_t index = 0u>
-			constexpr tuple_at_t<index, value_type> get() const { return::std::get<index>(owner_->row(index_)); }
-
-			constexpr value_type operator*() const { return owner_->row(index_); }
-			constexpr value_type operator[](difference_type offset) const { return owner_->row(index_ + offset); }
-
-			constexpr row_iterator& operator++() { ++index_; return *this; }
-			constexpr row_iterator operator++(int) { auto copy = *this; ++*this; return copy; }
-			constexpr row_iterator& operator--() { --index_; return *this; }
-			constexpr row_iterator operator--(int) { auto copy = *this; --*this; return copy; }
-			constexpr row_iterator& operator+=(difference_type offset) { index_ += offset; return *this; }
-			constexpr row_iterator& operator-=(difference_type offset) { index_ -= offset; return *this; }
-			constexpr row_iterator operator+(difference_type offset) const { auto copy = *this; return copy += offset; }
-			constexpr row_iterator operator-(difference_type offset) const { auto copy = *this; return copy -= offset; }
-
-			template<bool C> constexpr difference_type operator-(const row_iterator<C>& other) const {
-				return static_cast<difference_type>(index_) - static_cast<difference_type>(other.index_);
-			}
-			constexpr bool operator!=(row_iterator const& other) const { return !operator==(other); }
-			constexpr bool operator==(row_iterator const& other) const { return owner_ == other.owner_ && index_ == other.index_; }
-			template<bool C> constexpr bool operator==(row_iterator<C> const& other) const { return owner_ == other.owner_ && index_ == other.index_; }
-
-			// template<bool C> constexpr auto operator<=>(const row_iterator<C>& other) const { return index_ <=> other.index_; }
-
-			VKTL_NODISCARD size_type index() const noexcept { return index_; }
-			VKTL_NODISCARD owner_type* owner() const noexcept { return owner_; }
-
-		private:
-			owner_type* owner_ = nullptr;
-			size_type index_ = 0;
-		};
-
-	public:
-		using iterator = row_iterator<false>;
-		using const_iterator = row_iterator<true>;
-
-		VKTL_NODISCARD iterator begin() noexcept { return { this, 0 }; }
-		VKTL_NODISCARD iterator end() noexcept { return { this, size_ }; }
-		VKTL_NODISCARD const_iterator begin() const noexcept { return { this, 0 }; }
-		VKTL_NODISCARD const_iterator end() const noexcept { return { this, size_ }; }
-		VKTL_NODISCARD const_iterator cbegin() const noexcept { return begin(); }
-		VKTL_NODISCARD const_iterator cend() const noexcept { return end(); }
 
 		template<typename... Args>
 			requires(sizeof...(Args) == sizeof...(Ts) && (::std::constructible_from<Ts, Args&&> && ...))
 		iterator emplace(const_iterator where, Args&&... args) {
 			const auto pos = checked_index(where, true);
-			if (size_ == capacity_) {
-				emplace_reallocating(pos, ::std::forward<Args>(args)...);
-			}
-			else {
-				emplace_in_place(pos, ::std::forward<Args>(args)...);
-			}
-			return { this, pos };
+			if (size_ == capacity_) { emplace_reallocating(pos, ::std::forward<Args>(args)...); }
+			else { emplace_in_place(pos, ::std::forward<Args>(args)...); }
+			return { view(), pos };
 		}
 		iterator insert(const_iterator where, const Ts&... args)
 			requires((::std::copy_constructible<Ts> && ...)) { return emplace(where, args...); }
@@ -370,17 +498,23 @@ VKTL_EXPORT_ namespace vktl::detail {
 			const auto pos = checked_index(where, false);
 			move_rows_left(pos + 1, pos, size_ - pos - 1);
 			destroy_row(--size_);
-			return { this, pos };
+			return { view(), pos };
 		}
-
-		template<size_type I>
-		tuple_at_t<I, types>* data() noexcept { return reinterpret_cast<tuple_at_t<I, types>*>(buffer_ + get_offsets(capacity_)[I]); }
-		template<size_type I>
-		const tuple_at_t<I, types>* data() const noexcept { return reinterpret_cast<const tuple_at_t<I, types>*>(buffer_ + get_offsets(capacity_)[I]); }
 
 	private:
 		static constexpr size_type num_types = sizeof...(Ts);
 		static constexpr size_type max_alignment = ::std::max({ alignof(Ts)... });
+		static constexpr::std::index_sequence_for<Ts...> indices{};
+
+		// one offsets computation, all N column pointers; covers uninitialised slots
+		view_type raw_view() const noexcept {
+			if (!buffer_) { return {}; }
+			const auto offsets = get_offsets(capacity_);
+			return[&] <size_type... Is>(::std::index_sequence<Is...>) {
+				return view_type{ capacity_,
+					reinterpret_cast<tuple_at_t<Is, types>*>(const_cast<byte*>(buffer_) + offsets[Is])... };
+			}(indices);
+		}
 
 		static auto get_offsets(size_type cap) noexcept {
 			::std::array<size_type, num_types> offsets{};
@@ -394,73 +528,73 @@ VKTL_EXPORT_ namespace vktl::detail {
 			return offset;
 		}
 		static byte* allocate_raw(size_type cap) {
-			return cap == 0 ? nullptr : static_cast<byte*>(::operator new(calc_total_bytes(cap), ::std::align_val_t(max_alignment)));
+			return cap == 0 ? nullptr
+				: static_cast<byte*>(::operator new(calc_total_bytes(cap), ::std::align_val_t(max_alignment)));
 		}
 		static void deallocate_raw(byte* buffer) noexcept { ::operator delete(buffer, ::std::align_val_t(max_alignment)); }
+		template<typename T> static consteval size_type type_index() noexcept { return find_if_same_v<T, types>; }
 
-		template<typename T>
-		static consteval size_type type_index() noexcept { return find_if_same_v<T, types>; }
-
-		template<size_type... Is> auto row_tuple(size_type index, ::std::index_sequence<Is...>) { return ::std::tie(get<Is>(index)...); }
-		template<size_type... Is> auto row_tuple(size_type index, ::std::index_sequence<Is...>) const { return ::std::tie(get<Is>(index)...); }
-
-		template<typename... Args> void construct_row(size_type index, Args&&...args) {
-			construct_row_impl(index, ::std::index_sequence_for<Ts...>{}, ::std::forward_as_tuple(::std::forward<Args>(args)...));
-		}
-		template<size_type... Is, typename Tuple> void construct_row_impl(size_type index, ::std::index_sequence<Is...>, Tuple&& args) {
+		// ---- row lifetime, all expressed against a raw view ---------------------
+		template<typename Tuple>
+		void construct_row_from(size_type index, Tuple&& args) {
+			const auto v = raw_view();
 			size_type constructed = 0;
-			try { ((::std::construct_at(data<Is>() + index, ::std::get<Is>(::std::forward<Tuple>(args))), ++constructed), ...); }
-			catch (...) { destroy_constructed_row_prefix(index, constructed); throw; }
+			try {
+				[&] <size_type... Is>(::std::index_sequence<Is...>) {
+					((::std::construct_at(v.template data<Is>() + index,
+						::std::get<Is>(::std::forward<Tuple>(args))), ++constructed), ...);
+				}(indices);
+			}
+			catch (...) { destroy_row_prefix(v, index, constructed); throw; }
 		}
-
+		template<typename... Args> void construct_row(size_type index, Args&&... args) {
+			construct_row_from(index, ::std::forward_as_tuple(::std::forward<Args>(args)...));
+		}
 		void construct_default_row(size_type index) {
+			const auto v = raw_view();
+			size_type constructed = 0;
+			try {
+				[&] <size_type... Is>(::std::index_sequence<Is...>) {
+					((::std::construct_at(v.template data<Is>() + index), ++constructed), ...);
+				}(indices);
+			}
+			catch (...) { destroy_row_prefix(v, index, constructed); throw; }
+		}
+		static void destroy_row_prefix(const view_type& v, size_type index, size_type constructed) noexcept {
 			[&] <size_type... Is>(::std::index_sequence<Is...>) {
-				size_type constructed = 0;
-				try { ((::std::construct_at(data<Is>() + index), ++constructed), ...); }
-				catch (...) { destroy_constructed_row_prefix(index, constructed); throw; }
-			}(::std::index_sequence_for<Ts...>{});
+				((Is < constructed ? ::std::destroy_at(v.template data<Is>() + index) : void()), ...);
+			}(indices);
 		}
-
-		void destroy_constructed_row_prefix(size_type index, size_type constructed) noexcept {
-			[&] <size_type... Is>(::std::index_sequence<Is...>) {
-				((Is < constructed ? (::std::destroy_at(data<Is>() + index)) : void()), ...);
-			}(::std::index_sequence_for<Ts...>{});
-		}
-		void destroy_row(size_type index) noexcept {
-			[&] <size_type... Is>(::std::index_sequence<Is...>) { (::std::destroy_at(data<Is>() + index), ...); }(::std::index_sequence_for<Ts...>{});
-		}
+		void destroy_row(size_type index) noexcept { destroy_row_prefix(raw_view(), index, num_types); }
 		void shrink_to(size_type new_size) noexcept { while (size_ > new_size) { pop_back(); } }
 
 		void copy_construct_from(const vectors& other) {
-			for (size_type i = 0; i < other.size_; ++i) {
-				::std::apply([this](const Ts&... values) { emplace_back(values...); }, other.row(i));
-			}
+			for (auto r : other.view()) { ::std::apply([this](const Ts&... vs) { emplace_back(vs...); }, r); }
 		}
 		void move_construct_row_into(vectors& target, size_type index) {
-			::std::apply([&](Ts&... values) { target.emplace_back(::std::move(values)...); }, row(index));
+			::std::apply([&](Ts&... vs) { target.emplace_back(::std::move(vs)...); }, view().row(index));
 		}
 
-		void reallocate(size_type new_cap) {
-			vectors tmp;
-			tmp.buffer_ = allocate_raw(new_cap);
-			tmp.capacity_ = new_cap;
-			try { for (size_type i = 0; i < size_; ++i) move_construct_row_into(tmp, i); }
-			catch (...) { tmp.clear(); tmp.deallocate_buffer(); throw; }
-			clear();
-			deallocate_buffer();
-			swap(tmp);
-		}
+		void reallocate(size_type new_cap) { relocate_into(new_cap, size_, [](vectors&) {}); }
 
 		template<typename... Args>
 		void emplace_reallocating(size_type pos, Args&&... args) {
-			vectors tmp;
-			tmp.buffer_ = allocate_raw(capacity_after_insert());
-			tmp.capacity_ = capacity_after_insert();
-			try {
-				for (size_type i = 0; i < pos; ++i) move_construct_row_into(tmp, i);
+			relocate_into(capacity_after_insert(), pos, [&](vectors& tmp) {
 				tmp.construct_row(tmp.size_, ::std::forward<Args>(args)...);
 				++tmp.size_;
-				for (size_type i = pos; i < size_; ++i) move_construct_row_into(tmp, i);
+			});
+		}
+
+		// shared body of reallocate / emplace_reallocating
+		template<typename Middle>
+		void relocate_into(size_type new_cap, size_type split, Middle&& middle) {
+			vectors tmp;
+			tmp.buffer_ = allocate_raw(new_cap);
+			tmp.capacity_ = new_cap;
+			try {
+				for (size_type i = 0; i < split; ++i) { move_construct_row_into(tmp, i); }
+				middle(tmp);
+				for (size_type i = split; i < size_; ++i) { move_construct_row_into(tmp, i); }
 			}
 			catch (...) { tmp.clear(); tmp.deallocate_buffer(); throw; }
 			clear();
@@ -470,56 +604,58 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 		template<typename... Args>
 		void emplace_in_place(size_type pos, Args&&... args) {
-			if (pos == size_) {
-				construct_row(size_, ::std::forward<Args>(args)...);
-				++size_;
-				return;
-			}
-			construct_row(size_, ::std::move(get<Ts>(size_ - 1))...);
+			if (pos == size_) { construct_row(size_, ::std::forward<Args>(args)...); ++size_; return; }
+			// index-based, so vectors<int,int> works (the old get<Ts>() form was ambiguous)
+			[&] <size_type... Is>(::std::index_sequence<Is...>) {
+				construct_row(size_, ::std::move(get<Is>(size_ - 1))...);
+			}(indices);
 			++size_;
 			try {
 				move_rows_right(pos, size_ - 2, 1);
 				assign_row(pos, ::std::forward<Args>(args)...);
 			}
-			catch (...) {
-				--size_;
-				destroy_row(size_);
-				throw;
-			}
+			catch (...) { --size_; destroy_row(size_); throw; }
 		}
 
 		void move_rows_right(size_type first, size_type last, size_type distance) {
-			for (size_type i = last + 1; i-- > first;) assign_row_from(i + distance, i);
+			for (size_type i = last + 1; i-- > first;) { assign_row_from(i + distance, i); }
 		}
 		void move_rows_left(size_type first, size_type dest, size_type count) {
-			for (size_type i = 0; i < count; ++i) assign_row_from(dest + i, first + i);
+			for (size_type i = 0; i < count; ++i) { assign_row_from(dest + i, first + i); }
 		}
 		void assign_row_from(size_type dest, size_type src) {
-			[&] <size_type... Is>(::std::index_sequence<Is...>) { ((get<Is>(dest) = ::std::move(get<Is>(src))), ...); }(::std::index_sequence_for<Ts...>{});
+			const auto v = view();
+			[&] <size_type... Is>(::std::index_sequence<Is...>) {
+				((v.template get<Is>(dest) = ::std::move(v.template get<Is>(src))), ...);
+			}(indices);
 		}
-		template<typename... Args>
-		void assign_row(size_type index, Args&&... args) {
-			assign_row_impl(index, ::std::index_sequence_for<Ts...>{}, ::std::forward_as_tuple(::std::forward<Args>(args)...));
-		}
-		template<size_type... Is, typename Tuple>
-		void assign_row_impl(size_type index, ::std::index_sequence<Is...>, Tuple&& args) {
-			((get<Is>(index) = ::std::get<Is>(::std::forward<Tuple>(args))), ...);
+		template<typename... Args> void assign_row(size_type index, Args&&... args) {
+			const auto v = view();
+			auto tuple = ::std::forward_as_tuple(::std::forward<Args>(args)...);
+			[&] <size_type... Is>(::std::index_sequence<Is...>) {
+				((v.template get<Is>(index) = ::std::get<Is>(::std::move(tuple))), ...);
+			}(indices);
 		}
 
-		size_type capacity_after_insert() const noexcept { return size_ == capacity_ ? (capacity_ == 0 ? 1 : capacity_ * 2) : capacity_; }
+		size_type capacity_after_insert() const noexcept {
+			return size_ == capacity_ ? (capacity_ == 0 ? 1 : capacity_ * 2) : capacity_;
+		}
 		size_type checked_index(const_iterator where, bool allow_end) const noexcept {
-			assert(where.owner() == this);
 			assert(where.index() < size_ || (allow_end && where.index() == size_));
 			return where.index();
 		}
-
 		void deallocate_buffer() noexcept { if (buffer_) { deallocate_raw(buffer_); buffer_ = nullptr; capacity_ = 0; } }
 
-	private:
 		byte* buffer_ = nullptr;
 		size_type size_ = 0;
 		size_type capacity_ = 0;
 	};
+	template<typename... Rs>
+	spans(Rs&&...) -> spans<::std::ranges::range_value_t<::std::remove_reference_t<Rs>>...>;
+	template<typename... Us>
+	spans(vectors<Us...>&) -> spans<Us...>;
+	template<typename... Us>
+	spans(const vectors<Us...>&) -> spans<const Us...>;
 
 	template<typename T>
 	struct access_list {
@@ -585,4 +721,6 @@ VKTL_EXPORT_ namespace vktl::detail {
 	private:
 		vector<T> accesses_;
 	};
+
+
 }
