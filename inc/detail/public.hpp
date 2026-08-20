@@ -9,6 +9,9 @@
 // Resource-usage and binding-coordinate tags normally use `express` and stay
 // out of the inheritance chain. Use an `m<Tag, N>` component only when a tag
 // must retain independent state or behavior.
+// Command-pool policy is selected per command unit. `generation` is the
+// allocation default; transient and individual-reset are explicit policy tags
+// and must never be confused with command-buffer usage flags.
 // --------------------------------------------------------------------------
 
 VKTL_EXPORT_ namespace vktl {
@@ -461,19 +464,18 @@ VKTL_EXPORT_ namespace vktl {
 		void* handle;
 	};
 
+	namespace queue_duty {
+		using type = uint16_t;
+		inline constexpr type none = 0x0;
+		inline constexpr type compute = 0x1 << 0;
+		inline constexpr type transfer = 0x1 << 1;
+		inline constexpr type graphics = 0x1 << 2;
+		inline constexpr type present = 0x1 << 3;
+		inline constexpr type bind_sparse = 0x1 << 4;
+	}
+
 	namespace device_extensions {
 		using extensions::debug_named;
-
-		namespace queue_family_extensions {
-			using extensions::debug_named;
-			struct queue_priority { // not queue-family-global-priorities.
-				::std::span<float> priorities;
-			};
-		}
-		struct queue_family {
-			uint16_t family = 0u;
-			uint16_t count = 1u;
-		};
 	}
 	struct device {
 		uint16_t index; // index of device.
@@ -539,6 +541,10 @@ VKTL_EXPORT_ namespace vktl {
 		inline constexpr struct transfer_ {} transfer{};
 		inline constexpr struct present_ {} present;
 		inline constexpr struct bind_sparse_ {} bind_sparse;
+
+		struct priority { // not queue-family-global-priorities.
+			float value;
+		};
 	}
 	struct queue {
 		uint16_t family = 0u;
@@ -551,6 +557,17 @@ VKTL_EXPORT_ namespace vktl {
 		// in vulkan, free command buffer is an extensions.
 		// extend this from task will allow free command buffer.
 		struct allow_temporary_command_buffers {};
+	}
+
+	enum class command_pool_policy_kind : uint8_t {
+		generation,
+		transient,
+		individual_reset,
+	};
+
+	namespace command_pool_extensions {
+		inline constexpr struct transient_ {} transient {};
+		inline constexpr struct individual_reset_ {} individual_reset {};
 	}
 	template<typename Fn>
 	struct task { Fn func; };
@@ -850,9 +867,8 @@ VKTL_EXPORT_ namespace vktl {
 	}
 	namespace pipe_extensions {
 		using extensions::debug_named;
-		using extensions::graphics;
-		using extensions::compute;
-		// using extensions::use_existing;
+		inline constexpr struct rendering_ {} graphics {};
+		inline constexpr struct compute_ {} compute {};
 
 		struct pipe_bytes {
 			byte_view bytes;
@@ -952,19 +968,11 @@ VKTL_EXPORT_ namespace vktl {
 	namespace pass_extensions {
 		using extensions::allocate_from;
 		using extensions::debug_named;
-		using extensions::graphics;
-		using extensions::compute;
-		using extensions::transfer;
-#if VKTL_HAVE_WINDOW
-		using extensions::present;
-#endif
-
-		inline constexpr struct render_pass_ {} render_pass;
+		inline constexpr struct compute_ {} compute {};
+		inline constexpr struct rendering_ {} rendering {};
+		inline constexpr struct render_pass_ {} render_pass {};
 	}
 	inline constexpr struct pass_ {} pass;
-
-	// helper class.
-	// struct end_pass {};
 }
 
 

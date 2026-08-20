@@ -1,9 +1,6 @@
 #pragma once
 
-// Interface style: compact containers provide stable-address heterogeneous
-// storage and structure-of-arrays helpers used by Vulkan create-info builders.
-// Implementation: poly_list nodes carry an explicit deleter and intrusive
-// links; typed APIs preserve ownership without virtual functions.
+// not much say, only few containers.
 
 VKTL_EXPORT_ namespace vktl::detail {
 
@@ -127,6 +124,11 @@ VKTL_EXPORT_ namespace vktl::detail {
 		const_iterator cbegin() const noexcept { return begin(); }
 		const_iterator cend() const noexcept { return end(); }
 
+		node& front() noexcept { assert(this->root_.next != &this->root_); return *this->root_.next; }
+		node const& front() const noexcept { assert(this->root_.next != &this->root_); return *this->root_.next; }
+		node& back() noexcept { assert(this->root_.prev != &this->root_); return *this->root_.prev; }
+		node const& back() const noexcept { assert(this->root_.prev != &this->root_); return *this->root_.prev; }
+
 		iterator erase(const_iterator pos) noexcept {
 			auto* n = pos.ptr_;
 			node* next_node = n->next;
@@ -198,19 +200,125 @@ VKTL_EXPORT_ namespace vktl::detail {
 		size_type size_ = 0u;
 	};
 
-
 	template<typename...Ts>
 	struct vectors;
 
 	template<typename...Ts>
+	struct iterators {
+		static constexpr auto is_const = ((::std::is_const_v<Ts>) || ...);
+		using size_type = size_t;
+
+		using iterator_category = ::std::random_access_iterator_tag;
+		using iterator_concept = ::std::random_access_iterator_tag;
+		using difference_type = ::std::ptrdiff_t;
+		using value_type = ::std::tuple<Ts...>;
+		using reference = ::std::tuple<Ts&...>;
+
+		constexpr iterators() = default;
+		constexpr explicit iterators(::std::tuple<Ts*...> pointers) noexcept
+			: pointers_(pointers) 
+		{}
+		template<typename...Os>
+			requires(::std::convertible_to<Os(*)[], Ts(*)[]>)
+		constexpr iterators(iterators<Os...> const& other)
+			: pointers_{ other.pointers }
+		{}
+		constexpr iterators(iterators const&) noexcept = default;
+		constexpr iterators& operator=(iterators const&) noexcept = default;
+
+		template<size_type I = 0u>
+		constexpr decltype(auto) get() const noexcept {
+			return *::std::get<I>(pointers_);
+		}
+
+		constexpr reference operator*() const noexcept {
+			return dereference(::std::index_sequence_for<Ts...>{});
+		}
+		constexpr reference operator[](difference_type offset) const noexcept {
+			return dereference_at(offset, ::std::index_sequence_for<Ts...>{});
+		}
+		constexpr iterators& operator++() noexcept {
+			advance(1);
+			return *this;
+		}
+		constexpr iterators operator++(int) noexcept {
+			auto copy = *this;
+			++*this;
+			return copy;
+		}
+
+		constexpr iterators& operator--() noexcept {
+			advance(-1);
+			return *this;
+		}
+		constexpr iterators operator--(int) noexcept {
+			auto copy = *this;
+			--*this;
+			return copy;
+		}
+		constexpr iterators& operator+=(difference_type offset) noexcept {
+			advance(offset);
+			return *this;
+		}
+		constexpr iterators& operator-=(difference_type offset) noexcept {
+			advance(-offset);
+			return *this;
+		}
+		constexpr iterators operator+(difference_type offset) const noexcept {
+			auto copy = *this;
+			return copy += offset;
+		}
+		constexpr iterators operator-(difference_type offset) const noexcept {
+			auto copy = *this;
+			return copy -= offset;
+		}
+		friend constexpr iterators operator+(difference_type offset, iterators self) noexcept {
+			return self += offset;
+		}
+		constexpr difference_type operator-(const iterators& other) const noexcept {
+			return ::std::get<0>(pointers_) -
+				::std::get<0>(other.pointers_);
+		}
+		constexpr bool operator==(const iterators& other) const noexcept {
+			return ::std::get<0>(pointers_) == ::std::get<0>(other.pointers_);
+		}
+		constexpr auto operator<=>(const iterators& other) const noexcept {
+			return ::std::get<0>(pointers_) <=> ::std::get<0>(other.pointers_);
+		}
+
+	private:
+		template<::std::size_t... Is>
+		constexpr reference dereference(::std::index_sequence<Is...>) const noexcept {
+			return { *::std::get<Is>(pointers_)... };
+		}
+
+		template<::std::size_t... Is>
+		constexpr reference dereference_at(difference_type offset, ::std::index_sequence<Is...>) const noexcept {
+			return { ::std::get<Is>(pointers_)[offset]... };
+		}
+
+		constexpr void advance(difference_type offset) noexcept {
+			::std::apply([offset](auto*&... pointers) { ((pointers += offset), ...); }, pointers_);
+		}
+
+		::std::tuple<Ts*...> pointers_{};
+	};
+
+	template<typename...Ts>
 	struct spans {
 		static_assert(sizeof...(Ts) > 0, "multispan requires at least one type.");
+		static_assert(((!::std::is_reference_v<Ts>) && ...), "Spans not allow reference.");
+		static_assert(((::std::is_const_v<Ts>) && ...) || ((!::std::is_const_v<Ts>) && ...), "Must all const or non const.");
+		static_assert(((::std::is_volatile_v<Ts>) && ...) || ((!::std::is_volatile_v<Ts>) && ...), "Must all volatile or non const.");
+		
+		template<typename...> friend struct spans;
 
 		using types = ts<Ts...>;
 		using size_type = ::std::size_t;
 		using difference_type = ::std::ptrdiff_t;
 
-		template<size_type I> using element_t = tuple_at_t<I, types>;
+		template<size_type I> 
+		using element_t = tuple_at_t<I, types>;
 		static constexpr size_type num_types = sizeof...(Ts);
 
 		constexpr spans() noexcept = default;
@@ -218,7 +326,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 		constexpr spans& operator=(const spans&) noexcept = default;
 
 		// ---- adopt raw pointers -------------------------------------------------
-		constexpr spans(size_type count, Ts*... pointers) noexcept
+		constexpr spans(size_type count, Ts*...pointers) noexcept
 			: pointers_{ pointers... }, size_(count) {
 		}
 
@@ -228,8 +336,8 @@ VKTL_EXPORT_ namespace vktl::detail {
 			&& (!::std::same_as<::std::remove_cvref_t<Rs>, spans> && ...)
 			&& (::std::ranges::contiguous_range<Rs> && ...)
 			&& (::std::ranges::sized_range<Rs> && ...)
-			&& (::std::convertible_to<::std::ranges::range_value_t<::std::remove_reference_t<Rs>>(*)[], Ts(*)[]> && ...))
-			constexpr explicit spans(Rs&&... ranges)
+			&& (::std::convertible_to<::std::ranges::range_value_t<Rs>(*)[], Ts(*)[]> && ...))
+		constexpr explicit spans(Rs&... ranges)
 			: pointers_{ ::std::ranges::data(ranges)... }
 			, size_(::std::min({ size_type(::std::ranges::size(ranges))... })) {
 		}
@@ -248,7 +356,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 			requires(sizeof...(Us) == num_types 
 			&& !(::std::same_as<Us, Ts> && ...)
 			&& (::std::convertible_to<Us(*)[], Ts(*)[]> && ...))
-			constexpr spans(const spans<Us...>& other) noexcept : size_(other.size()) {
+		constexpr spans(const spans<Us...>& other) noexcept : size_(other.size()) {
 			[&] <size_type... Is>(::std::index_sequence<Is...>) {
 				pointers_ = ::std::tuple<Ts*...>{ other.template data<Is>()... };
 			}(::std::index_sequence_for<Ts...>{});
@@ -261,7 +369,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 		VKTL_NODISCARD constexpr size_type size() const noexcept { return size_; }
 		VKTL_NODISCARD constexpr bool empty() const noexcept { return size_ == 0; }
-		VKTL_NODISCARD constexpr size_type size_bytes() const noexcept { return (size_ * sizeof(Ts) + ...); }
+		VKTL_NODISCARD constexpr size_type size_bytes() const noexcept { return (size_ * ((sizeof(Ts)) + ...)); }
 
 		template<size_type I>
 		VKTL_NODISCARD constexpr element_t<I>* data() const noexcept { return ::std::get<I>(pointers_); }
@@ -312,50 +420,9 @@ VKTL_EXPORT_ namespace vktl::detail {
 			return true;
 		}
 
-	private:
-		class row_iterator {
-		public:
-			using iterator_category = ::std::random_access_iterator_tag;
-			using difference_type = ::std::ptrdiff_t;
-			using value_type = ::std::tuple<Ts&...>;
-			using reference = value_type;
-
-			constexpr row_iterator() = default;
-			constexpr row_iterator(spans view, size_type index) noexcept : view_(view), index_(index) {}
-
-			template<size_type I = 0u>
-			constexpr auto& get() const { return view_.template get<I>(index_); }
-
-			constexpr value_type operator*() const { return view_.row(index_); }
-			constexpr value_type operator[](difference_type offset) const { return view_.row(index_ + offset); }
-
-			constexpr row_iterator& operator++() { ++index_; return *this; }
-			constexpr row_iterator operator++(int) { auto copy = *this; ++*this; return copy; }
-			constexpr row_iterator& operator--() { --index_; return *this; }
-			constexpr row_iterator operator--(int) { auto copy = *this; --*this; return copy; }
-			constexpr row_iterator& operator+=(difference_type offset) { index_ += offset; return *this; }
-			constexpr row_iterator& operator-=(difference_type offset) { index_ -= offset; return *this; }
-			constexpr row_iterator operator+(difference_type offset) const { auto copy = *this; return copy += offset; }
-			constexpr row_iterator operator-(difference_type offset) const { auto copy = *this; return copy -= offset; }
-			friend constexpr row_iterator operator+(difference_type offset, row_iterator self) { return self += offset; }
-			constexpr difference_type operator-(const row_iterator& other) const {
-				return static_cast<difference_type>(index_) - static_cast<difference_type>(other.index_);
-			}
-
-			constexpr bool operator==(const row_iterator& other) const { return index_ == other.index_; }
-			constexpr auto operator<=>(const row_iterator& other) const { return index_ <=> other.index_; }
-
-			VKTL_NODISCARD constexpr size_type index() const noexcept { return index_; }
-
-		private:
-			spans view_{};
-			size_type index_ = 0;
-		};
-
-	public:
 		// element constness lives in Ts, so a span view has a single iterator flavour
-		using iterator = row_iterator;
-		using const_iterator = row_iterator;
+		using iterator = iterators<Ts...>;
+		using const_iterator = iterators<Ts...>;
 
 		VKTL_NODISCARD constexpr iterator begin() const noexcept { return { *this, 0 }; }
 		VKTL_NODISCARD constexpr iterator end() const noexcept { return { *this, size_ }; }
@@ -371,30 +438,36 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 		template<typename Owner>
 		constexpr void adopt(Owner& owner) noexcept {
-			[&] <size_type... Is>(::std::index_sequence<Is...>) {
+			[&]<size_type... Is>(::std::index_sequence<Is...>) {
 				pointers_ = ::std::tuple<Ts*...>{ owner.template data<Is>()... };
 			}(::std::index_sequence_for<Ts...>{});
 			size_ = owner.size();
 		}
 
-		template<typename...> friend struct spans;
-
+	private:
 		::std::tuple<Ts*...> pointers_{};
 		size_type size_ = 0;
 	};
+	template<::std::ranges::contiguous_range... Rs>
+	spans(Rs&...) -> spans<::std::ranges::range_value_t<Rs>...>;
+	template<typename... Us>
+	spans(vectors<Us...>&) -> spans<Us...>;
+	template<typename... Us>
+	spans(const vectors<Us...>&) -> spans<const Us...>;
 
 	template<typename...Ts>
 	struct vectors {
-		static_assert(sizeof...(Ts) > 0, "multivec requires at least one type.");
+		static_assert(sizeof...(Ts) > 0, "Vectors requires at least one type.");
+		static_assert(((!::std::is_reference_v<Ts>) && ...), "Vectors not allow reference.");
+		static_assert(((!::std::is_const_v<Ts>) && ...) && ((!::std::is_volatile_v<Ts>) && ...), "Vectors not allow const or volatile.");
 
 		using types = ts<Ts...>;
 		using size_type = ::std::size_t;
 		using byte = ::std::byte;
-
 		using view_type = spans<Ts...>;
-		using const_view_type = spans<const Ts...>;
-		using iterator = typename view_type::iterator;
-		using const_iterator = typename const_view_type::iterator;
+		using const_view_type = spans<Ts const...>;
+		using iterator = iterators<Ts...>;
+		using const_iterator = iterators<Ts const...>;
 
 		constexpr vectors() = default;
 		explicit vectors(size_type size) 
@@ -421,6 +494,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 		VKTL_NODISCARD bool empty() const noexcept { return size_ == 0; }
 
 		// ---- the view is now the single source of truth for element access ------
+
 		VKTL_NODISCARD view_type view() noexcept { return raw_view().first(size_); }
 		VKTL_NODISCARD const_view_type view() const noexcept { return const_view_type{ raw_view().first(size_) }; }
 		operator view_type() noexcept { return view(); }
@@ -441,7 +515,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 		VKTL_NODISCARD::std::tuple<Ts&...> row(size_type i) { return view().row(i); }
 		VKTL_NODISCARD::std::tuple<Ts const&...> row(size_type i) const { return view().row(i); }
-		VKTL_NODISCARD::std::tuple<Ts&...> front() { return view().front(); }          // was duplicated + const
+		VKTL_NODISCARD::std::tuple<Ts&...> front() { return view().front(); }
 		VKTL_NODISCARD::std::tuple<Ts const&...> front() const { return view().front(); }
 		VKTL_NODISCARD::std::tuple<Ts&...> back() { return view().back(); }
 		VKTL_NODISCARD::std::tuple<Ts const&...> back() const { return view().back(); }
@@ -650,12 +724,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 		size_type size_ = 0;
 		size_type capacity_ = 0;
 	};
-	template<typename... Rs>
-	spans(Rs&&...) -> spans<::std::ranges::range_value_t<::std::remove_reference_t<Rs>>...>;
-	template<typename... Us>
-	spans(vectors<Us...>&) -> spans<Us...>;
-	template<typename... Us>
-	spans(const vectors<Us...>&) -> spans<const Us...>;
+
 
 	template<typename T>
 	struct access_list {

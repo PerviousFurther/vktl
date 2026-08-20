@@ -71,7 +71,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 					assert(info.imageColorSpace != VK_ VK_COLOR_SPACE_MAX_ENUM_KHR);
 				}
 				else if (info.imageFormat == VK_ VK_FORMAT_MAX_ENUM || info.imageColorSpace == VK_ VK_COLOR_SPACE_MAX_ENUM_KHR) {
-					invoke(formats, VK_ vkGetPhysicalDeviceSurfaceFormatsKHR, phydv, win->handle())
+					vkget(formats, VK_ vkGetPhysicalDeviceSurfaceFormatsKHR, phydv, win->handle())
 						| popup{"[SWAPCHAIN] No any surface format was supported."};
 					if (info.imageFormat == VK_ VK_FORMAT_MAX_ENUM) {
 						info.imageFormat = formats[0u].format;
@@ -86,7 +86,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 					assert(info.imageColorSpace != VK_ VK_COLOR_SPACE_MAX_ENUM_KHR);
 				}
 				else if (info.presentMode == VK_ VK_PRESENT_MODE_MAX_ENUM_KHR) {
-					invoke(present_modes, VK_ vkGetPhysicalDeviceSurfacePresentModesKHR, phydv, win->handle())
+					vkget(present_modes, VK_ vkGetPhysicalDeviceSurfacePresentModesKHR, phydv, win->handle())
 						| popup{"[SWAPCHAIN] No any present mode was supported."};
 					info.presentMode = present_modes[0u];
 				}

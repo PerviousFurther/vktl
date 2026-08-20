@@ -444,6 +444,10 @@ VKTL_EXPORT_ namespace vktl::detail {
 	template<typename T, typename...Qs>
 	concept object_of = requires(T& v){ v.add_ref(); v.release(); } && T::template query<Qs...>();
 
+	// reserve, maybe change implmentation.
+	template<typename T, typename...Qs>
+	concept chain_contain = object_of<T, Qs...>;
+
 	template<typename T, typename...Qs>
 	concept parent_have = []() constexpr {
 		if constexpr (requires(T& v) { v.template parent<Qs...>(); }) {
@@ -473,6 +477,12 @@ VKTL_EXPORT_ namespace vktl::detail {
 		noexcept {
 		return pthis->template parent<T>();
 	}
+	template<typename T, typename N>
+	constexpr auto parent_of(N& ref)
+		noexcept {
+		return ref.template parent<T>();
+	}
+
 
 	template<typename T, typename N>
 	constexpr auto handle_of(N* pthis)

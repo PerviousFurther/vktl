@@ -155,7 +155,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 		~m() { reset(); }
 
-		void relocate() {
+		void relocate() noexcept {
 			N::relocate();
 
 			auto extensions = base::extensions(parent_of<instance>(this)->api_version_minor());
@@ -163,9 +163,34 @@ VKTL_EXPORT_ namespace vktl::detail {
 			info.ppEnabledExtensionNames = extensions.data();
 			info.enabledLayerCount = 0u;
 			info.ppEnabledLayerNames = nullptr;
-			info.queueCreateInfoCount = uint32_t(queues.size());
-			info.pQueueCreateInfos = queues.data();
 			info.pEnabledFeatures = &features;
+
+			for (auto it = queues_.begin(); it != queues_.end(); ) {
+				auto itnx = it;
+				for (auto itn = it + 1; itn != queues_.end(); ) {
+					if (itn.get<0u>().queueFamilyIndex == it.get<0u>().queueFamilyIndex) {
+						auto& priorities = itn.get<1u>();
+						it.get<1u>().insert(it.get<1u>().end(), priorities.begin(), priorities.end());
+						it.get<0u>().queueCount += itn.get<0u>().queueCount;
+
+						auto idx = ::std::distance(queues_.begin(), it);
+						itn = queues_.erase(itn);
+						it = queues_.begin() + idx;
+					}
+					else {
+						if (itnx == it) { itnx = itn; }
+						itn++;
+					}
+				}
+				if (itnx != it) {
+					it = itnx;
+				}
+				else {
+					break;
+				}
+			} 
+			info.queueCreateInfoCount = uint32_t(queues_.size());
+			info.pQueueCreateInfos = queues_.data<0u>();
 		}
 
 		bool append_extensions(const char* layer, uint16_t disabled_minor = api::max_minor + 1u) {
@@ -303,26 +328,37 @@ VKTL_EXPORT_ namespace vktl::detail {
 			return result;
 		}
 
-		// the function designed to check whether the queue can be obtain.
-		bool contain_queue(uint32_t family, uint32_t index) {
-			auto it = ::std::ranges::find_if(queues, 
-				[&](auto const& queue) { queue.queueFamilyIndex == family });
-			if (it != queues.end()) {
-				return it->queueCount > index;
+		void append(queue info) {
+			assert(!handle_); // append operation only enable when not initialized.
+			if (queues_.size() || get<0u>(queues_.back()).queueFamilyIndex == info.family) {
+				auto& last = get<0u>(queues_.back());
+				last.queueCount = (::std::max)(info.index + 1u, last.queueCount);
 			}
 			else {
-				return false;
+				queues_.emplace_back(VK_ VkDeviceQueueCreateInfo{ 
+					.sType = VK_ VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+					.queueFamilyIndex = info.family,
+					.queueCount = info.index + 1u,
+				});
 			}
 		}
+
+		auto& last_queue() noexcept {
+			assert(!handle_); // append operation only enable when not initialized.
+			assert(queues_.size()); // are you forget to append queue at first?
+			return queues_.back();
+		}
+
+		auto& queues() const noexcept { return queues_; }
 
 	protected:
 		VK_ VkDeviceCreateInfo info;
 		VK_ VkPhysicalDeviceFeatures features = {};
-		vector<VK_ VkDeviceQueueCreateInfo> queues;
-
+		
 	private:
 		uint32_t device_index_ = 0u;
 		VK_ VkPhysicalDevice phydv_{ VK_NULL_HANDLE };
+		vectors<VK_ VkDeviceQueueCreateInfo, vector<float>> queues_;
 		copyable_if_null<VK_ VkDevice> handle_{ VK_NULL_HANDLE };
 
 		// TODO: maybe add sampler also.
@@ -333,22 +369,22 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 	using namespace device_extensions;
 
-	template<typename N>
-	struct m<queue_family, N> : N {
-		constexpr m(queue_family family, auto&&...others)
-			: N{ forward_(others)... } 
-			, priorities(1.0f, family.count) {
-			assert(::std::ranges::find_if(N::queues, 
-				[&](auto& value) { return value.queueFamilyIndex == family.family; }) == N::queues.end()); // not allow different queue_family with same family in inherit chain.
-			N::queues.emplace_back(VK_ VkDeviceQueueCreateInfo {
-				.sType = VK_ VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
-				.queueFamilyIndex = family.family,
-				.queueCount = family.count,
-				.pQueuePriorities = priorities.data(),
-			});
-		}
-		
-	protected: 
-		::std::vector<float> priorities;
-	};
+	// template<typename N>
+	// struct m<queue_family, N> : N {
+	// 	constexpr m(queue_family family, auto&&...others)
+	// 		: N{ forward_(others)... } 
+	// 		, priorities(1.0f, family.count) {
+	// 		assert(::std::ranges::find_if(N::queues, 
+	// 			[&](auto& value) { return value.queueFamilyIndex == family.family; }) == N::queues.end()); // not allow different queue_family with same family in inherit chain.
+	// 		N::queues.emplace_back(VK_ VkDeviceQueueCreateInfo {
+	// 			.sType = VK_ VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+	// 			.queueFamilyIndex = family.family,
+	// 			.queueCount = family.count,
+	// 			.pQueuePriorities = priorities.data(),
+	// 		});
+	// 	}
+	// 	
+	// protected: 
+	// 	::std::vector<float> priorities;
+	// };
 }

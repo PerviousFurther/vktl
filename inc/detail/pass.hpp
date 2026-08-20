@@ -40,7 +40,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 	using namespace pass_extensions;
 
 	template<>
-	struct is_queryable<render_pass_, graphics_> : ::std::true_type {};
+	struct is_queryable<render_pass_, rendering_> : ::std::true_type {};
 
 	template<typename N>
 	struct m<pass_, N> : N {
@@ -376,9 +376,9 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 #if defined(VK_KHR_dynamic_rendering)
 	template<typename N>
-	struct m<graphics_, N> : basic_graphics_pass<N> {
+	struct m<pass_extensions::rendering_, N> : basic_graphics_pass<N> {
 		using base = basic_graphics_pass<N>;
-		constexpr m(graphics_, auto&&...infos)
+		constexpr m(rendering_, auto&&...infos)
 			: base{ forward_(infos)... }
 		{
 		}
@@ -390,8 +390,8 @@ VKTL_EXPORT_ namespace vktl::detail {
 	};
 #else
 	template<typename N>
-	struct m<graphics_, N> : N {
-		constexpr m(graphics_, auto&&...infos)
+	struct m<rendering_, N> : N {
+		constexpr m(rendering_, auto&&...infos)
 			: base{ forward_(infos)... }
 		{}
 
@@ -401,7 +401,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 #endif
 
 	template<typename N>
-	struct m<compute_, N> : N {
+	struct m<pass_extensions::compute_, N> : N {
 		using base = N;
 		using N::append;
 		m(compute_, auto&&...infos)
@@ -583,7 +583,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 	struct express<pipe_> {
 		template<typename B>
 		static constexpr void invoke(pipe_, B& base) {
-			if constexpr (object_of<B, graphics_>) {
+			if constexpr (object_of<B, rendering_>) {
 				base.append(VK_ VkGraphicsPipelineCreateInfo{
 					.sType = VK_ VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
 					.pStages = nullptr,
@@ -615,7 +615,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 	template<>
 	struct express<subpass> {
 		template<typename B>
-		static constexpr void invoke(subpass subpass, B& base) requires(object_of<B, graphics_>) {
+		static constexpr void invoke(subpass subpass, B& base) requires(object_of<B, rendering_>) {
 			base.append_subpass(subpass.index);
 		}
 	};

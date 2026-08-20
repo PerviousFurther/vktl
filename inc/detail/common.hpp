@@ -528,6 +528,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 	protected:
 		constexpr auto& allocator_impl() noexcept { return allocator_; }
+		
 
 	private:
 		allocator_type allocator_;

@@ -37,6 +37,8 @@
 # endif
 #endif
 
+#define VKTL_INLINE_LAM
+
 #if !defined(VKTL_NO_UNIQUE_ADDRESS)
 # define VKTL_NO_UNIQUE_ADDRESS
 #endif
@@ -102,6 +104,7 @@
 # include <thread>
 # include <condition_variable>
 # include <deque>
+# include <list>
 
 # include <memory>
 
@@ -132,7 +135,7 @@ namespace VK_NAMESPACE {
 
 #define forward_(x) ::std::forward<decltype(x)>(x)
 
-#include "detail/meta.hpp"
+//#include "detail/trait.hpp"
 #include "detail/utils.hpp"
 #include "detail/container.hpp"
 #include "detail/objects.hpp"
@@ -168,6 +171,7 @@ VKTL_EXPORT_ namespace vktl {
 #include "detail/bind_set.hpp"
 #include "detail/sampler.hpp"
 #include "detail/execution.hpp"
+#include "detail/task_recipe.hpp"
 #include "detail/task.hpp"
 
 #endif
