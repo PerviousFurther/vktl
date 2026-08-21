@@ -1,19 +1,99 @@
 #pragma once
 
 // --- Agents specification -------------------------------------------------
-// A task owns every compiled generation. `compiled_` is FIFO ordered and
-// `active_` changes only after description, queue resolution, pool acquisition,
-// recording, revision validation, and task-local storage preparation succeed.
-// Refresh rollback erases only its staging node and immediately abandons that
-// node's command-pool group; it never mutates the prior active generation.
-// Frame variants expand independently per command unit. Selection is an epoch
-// marker only; materialization updates preallocated task-local payload columns
-// and never calls a Vulkan queue API or allocates.
-// Registration occurs from `finalize()`, relocation rebinds the registry view,
-// and destruction requires all submitted generations to be complete.
+// A task owns every compiled generation, payload, command buffer, command pool,
+// submission slot, and completion frontier. Refresh publishes a staging
+// generation only after recording and revision validation succeed. Frame
+// variants expand independently per command unit. prepare_submit() updates only
+// preallocated task-local storage; task::submit() invokes queue operations via
+// execution's per-queue service. No execution epoch or task registry is used.
 // --------------------------------------------------------------------------
 
 VKTL_EXPORT_ namespace vktl::detail {
+
+	enum class generation_state : uint8_t { staging, ready, retiring, failed };
+	enum class submission_state : uint8_t {
+		complete, preparing, submitting, in_flight, partial_submission
+	};
+	enum class busy_policy : uint8_t { wait, skip };
+	struct submit_policy {
+		busy_policy busy = busy_policy::wait;
+		bool allow_refresh = true;
+	};
+
+	struct task_command_pool : poly_list::node {
+		uint32_t worker = 0u;
+		uint32_t family = uint32_t(invalid);
+		VK_ VkCommandPoolCreateFlags flags = 0u;
+		command_pool_policy_kind recycle = command_pool_policy_kind::generation;
+		uint64_t fingerprint = 0u;
+		VK_ VkCommandPool handle = VK_NULL_HANDLE;
+		vector<VK_ VkCommandBuffer> buffers;
+		VK_ VkDevice device = VK_NULL_HANDLE;
+		VK_ VkAllocationCallbacks const* allocator = nullptr;
+	};
+
+	inline void reclaim_task_command_pool(void* data) {
+		auto& pool = *static_cast<task_command_pool*>(data);
+		if (!pool.handle) return;
+		if (pool.recycle == command_pool_policy_kind::free_command_buffer
+			&& !pool.buffers.empty()) {
+			VK_ vkFreeCommandBuffers(pool.device, pool.handle,
+				uint32_t(pool.buffers.size()), pool.buffers.data());
+		}
+		else if (pool.recycle == command_pool_policy_kind::reset_command_buffer) {
+			for (auto command : pool.buffers) {
+				VK_ vkResetCommandBuffer(command, 0u)
+					| popup{ "[TASK] Failed to reset a command buffer." };
+			}
+		}
+		else {
+			VK_ vkResetCommandPool(pool.device, pool.handle, 0u)
+				| popup{ "[TASK] Failed to reset a command pool." };
+		}
+		VK_ vkDestroyCommandPool(pool.device,
+			::std::exchange(pool.handle, VK_NULL_HANDLE), pool.allocator);
+	}
+
+	struct optional_frame_scope {
+		bool present = false;
+		frame_scope_id identity = 0u;
+	};
+
+	template<typename Object>
+	constexpr optional_frame_scope frame_scope_of(Object const& object) noexcept {
+		if constexpr (requires { object.frame_scope_identity(); }) {
+			return { true, frame_scope_id(object.frame_scope_identity()) };
+		}
+		else return {};
+	}
+
+	template<typename Source, typename Destination>
+	constexpr void validate_frame_dependency(Source const& source,
+		Destination const& destination) noexcept {
+		auto lhs = frame_scope_of(source);
+		auto rhs = frame_scope_of(destination);
+		assert((!lhs.present || !rhs.present || lhs.identity == rhs.identity)
+			&& "dependent frame resources must belong to the same frame scope");
+	}
+
+	enum class dependency_implementation : uint8_t { pipeline_barrier, semaphore };
+
+	struct dependency_edge {
+		uint32_t source_command = uint32_t(invalid);
+		uint32_t destination_command = uint32_t(invalid);
+		uint32_t source_queue = uint32_t(invalid);
+		uint32_t destination_queue = uint32_t(invalid);
+		optional_frame_scope frame_scope;
+		dependency_implementation implementation =
+			dependency_implementation::pipeline_barrier;
+	};
+
+	inline void select_implementation(dependency_edge& edge) noexcept {
+		edge.implementation = edge.source_queue == edge.destination_queue
+			? dependency_implementation::pipeline_barrier
+			: dependency_implementation::semaphore;
+	}
 
 	inline uint32_t command_variant_count(
 		span<box<vptr::frame_related> const> scopes) {
@@ -43,7 +123,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 		VK_ VkCommandBufferUsageFlags usage = VK_ VkCommandBufferUsageFlags(0u);
 		command_pool_policy_kind policy = command_pool_policy_kind::generation;
 		command_pool_policy_view policy_view;
-		command_pool_handle_id pool = 0u;
+		task_command_pool* pool = nullptr;
 		poly_list recipes;
 		vector<box<vptr::frame_related>> frame_scopes;
 		vector<uint32_t> strides;
@@ -70,26 +150,32 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 	struct compiled_payload : poly_list::node {
 		using prepare_fn = void(*)(compiled_payload&);
-		using materialize_fn = void(*)(compiled_payload&, compiled_task const&);
+		using prepare_submit_fn = void(*)(compiled_payload&, compiled_task const&);
 
 		void prepare() { prepare_(*this); }
-		void materialize(compiled_task const& task) { materialize_(*this, task); }
+		void prepare_submit(compiled_task const& task) { prepare_submit_(*this, task); }
 		bool enabled() const noexcept { return enabled_; }
+		void request_completion() noexcept {
+			completion_requested_ = true;
+			operation.user_completion = true;
+		}
 
 	protected:
 		template<typename T>
 		void bind_payload() noexcept {
 			prepare_ = [](compiled_payload& base) { static_cast<T&>(base).prepare_storage(); };
-			materialize_ = [](compiled_payload& base, compiled_task const& task) {
-				static_cast<T&>(base).materialize_storage(task);
+			prepare_submit_ = [](compiled_payload& base, compiled_task const& task) {
+				static_cast<T&>(base).prepare_submit_storage(task);
 			};
 			operation.invoke = &T::invoke;
 			operation.storage = static_cast<T const*>(this);
+			operation.fence_capable = T::fence_capable;
 		}
 
 		prepare_fn prepare_ = nullptr;
-		materialize_fn materialize_ = nullptr;
+		prepare_submit_fn prepare_submit_ = nullptr;
 		bool enabled_ = false;
+		bool completion_requested_ = false;
 
 	public:
 		queue_operation operation;
@@ -108,86 +194,97 @@ VKTL_EXPORT_ namespace vktl::detail {
 		queue_stage_flags stage = queue_all_commands_stage;
 	};
 
-	struct submit_payload : compiled_payload {
-		submit_payload() { bind_payload<submit_payload>(); }
-
+	struct base_submit_payload : compiled_payload {
 		uint32_t queue = uint32_t(invalid);
 		vector<uint32_t> commands;
 		vector<semaphore_operand> waits;
 		vector<semaphore_operand> signals;
-		queue_dispatch_config dispatch;
-
-		vector<VK_ VkCommandBuffer> command_handles;
-		vector<submit_semaphore_value> semaphore_values;
-#if defined(VK_KHR_synchronization2)
-		vector<VK_ VkCommandBufferSubmitInfoKHR> command_infos;
-		vector<VK_ VkSemaphoreSubmitInfoKHR> semaphore_infos;
-#endif
 		vector<VK_ VkSemaphore> legacy_semaphores;
 		vector<VK_ VkPipelineStageFlags> legacy_stages;
 		vector<uint64_t> legacy_values;
+	};
+
+
+	struct submit_payload : base_submit_payload {
+		static constexpr bool fence_capable = true;
+		submit_payload() { bind_payload<submit_payload>(); }
+
+		vector<VK_ VkCommandBuffer> command_handles;
+		vector<submit_semaphore_value> semaphore_values;
 
 		void prepare_storage() {
 			enabled_ = !commands.empty() || !waits.empty() || !signals.empty();
 			operation.queue_index = queue;
 			command_handles.resize(commands.size());
 			semaphore_values.resize(waits.size() + signals.size());
-#if defined(VK_KHR_synchronization2)
-			command_infos.resize(commands.size());
-			semaphore_infos.resize(waits.size() + signals.size());
-#endif
 			legacy_semaphores.resize(waits.size() + signals.size());
 			legacy_stages.resize(waits.size());
 			legacy_values.resize(waits.size() + signals.size());
 		}
 
-		void materialize_storage(compiled_task const& task);
+		void prepare_submit_storage(compiled_task const& task);
 
-		static void invoke(VK_ VkQueue queue_handle, void const* storage) {
+		static void invoke(VK_ VkQueue queue_handle, void const* storage,
+			VK_ VkFence completion) {
 			auto& self = *static_cast<submit_payload const*>(storage);
-#if defined(VK_KHR_synchronization2)
-			if (self.dispatch.submit2) {
-				VK_ VkSubmitInfo2KHR info{
-					.sType = VK_ VK_STRUCTURE_TYPE_SUBMIT_INFO_2_KHR,
-					.waitSemaphoreInfoCount = uint32_t(self.waits.size()),
-					.pWaitSemaphoreInfos = self.semaphore_infos.data(),
-					.commandBufferInfoCount = uint32_t(self.command_infos.size()),
-					.pCommandBufferInfos = self.command_infos.data(),
-					.signalSemaphoreInfoCount = uint32_t(self.signals.size()),
-					.pSignalSemaphoreInfos = self.semaphore_infos.data() + self.waits.size(),
+
+
+				VK_ VkSubmitInfo info{
+					.sType = VK_ VK_STRUCTURE_TYPE_SUBMIT_INFO,
+					.waitSemaphoreCount = uint32_t(self.waits.size()),
+					.pWaitSemaphores = self.legacy_semaphores.data(),
+					.pWaitDstStageMask = self.legacy_stages.data(),
+					.commandBufferCount = uint32_t(self.command_handles.size()),
+					.pCommandBuffers = self.command_handles.data(),
+					.signalSemaphoreCount = uint32_t(self.signals.size()),
+					.pSignalSemaphores = self.legacy_semaphores.data() + self.waits.size(),
 				};
-				self.dispatch.submit2(queue_handle, 1u, &info, VK_NULL_HANDLE)
-					| popup{ "[EXECUTION] Queue submission failed." };
-				return;
-			}
-#endif
-			VK_ VkSubmitInfo info{
-				.sType = VK_ VK_STRUCTURE_TYPE_SUBMIT_INFO,
-				.waitSemaphoreCount = uint32_t(self.waits.size()),
-				.pWaitSemaphores = self.legacy_semaphores.data(),
-				.pWaitDstStageMask = self.legacy_stages.data(),
-				.commandBufferCount = uint32_t(self.command_handles.size()),
-				.pCommandBuffers = self.command_handles.data(),
-				.signalSemaphoreCount = uint32_t(self.signals.size()),
-				.pSignalSemaphores = self.legacy_semaphores.data() + self.waits.size(),
-			};
 #if defined(VK_KHR_timeline_semaphore)
-			VK_ VkTimelineSemaphoreSubmitInfoKHR timeline{
-				.sType = VK_ VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO_KHR,
-				.waitSemaphoreValueCount = uint32_t(self.waits.size()),
-				.pWaitSemaphoreValues = self.legacy_values.data(),
-				.signalSemaphoreValueCount = uint32_t(self.signals.size()),
-				.pSignalSemaphoreValues = self.legacy_values.data() + self.waits.size(),
-			};
-			if (self.dispatch.timeline_semaphore) info.pNext = &timeline;
+				VK_ VkTimelineSemaphoreSubmitInfoKHR timeline{
+					.sType = VK_ VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO_KHR,
+					.waitSemaphoreValueCount = uint32_t(self.waits.size()),
+					.pWaitSemaphoreValues = self.legacy_values.data(),
+					.signalSemaphoreValueCount = uint32_t(self.signals.size()),
+					.pSignalSemaphoreValues = self.legacy_values.data() + self.waits.size(),
+				};
+				info.pNext = &timeline;
 #endif
-			VK_ vkQueueSubmit(queue_handle, 1u, &info, VK_NULL_HANDLE)
-				| popup{ "[EXECUTION] Queue submission failed." };
+				VK_ vkQueueSubmit(queue_handle, 1u, &info, completion)
+					| popup{ "[EXECUTION] Queue submission failed." };
+
+
 		}
 	};
 
+#if defined(VK_KHR_synchronization2)
+	struct submit_payload2 : base_submit_payload {
+		static constexpr bool fence_capable = true;
+		vectors<VK_ VkCommandBufferSubmitInfoKHR, vector<VK_ VkCommandBuffer>> command_infos;
+		vectors<VK_ VkSemaphoreSubmitInfoKHR, vector<VK_ VkSemaphore>> semaphore_infos;
+
+		static void invoke(VK_ VkQueue queue_handle, void const* storage,
+			VK_ VkFence completion) {
+			auto& self = *static_cast<submit_payload2 const*>(storage);
+			VK_ VkSubmitInfo2KHR info{
+				.sType = VK_ VK_STRUCTURE_TYPE_SUBMIT_INFO_2_KHR,
+				.waitSemaphoreInfoCount = uint32_t(self.waits.size()),
+				.pWaitSemaphoreInfos = self.semaphore_infos.data<0u>(),
+				.commandBufferInfoCount = uint32_t(self.command_infos.size()),
+				.pCommandBufferInfos = self.command_infos.data<0u>(),
+				.signalSemaphoreInfoCount = uint32_t(self.signals.size()),
+				.pSignalSemaphoreInfos = self.semaphore_infos.data<0u>() + self.waits.size(),
+			};
+			VK_ vkQueueSubmit2KHR(queue_handle, 1u, &info, completion)
+				| popup{ "[EXECUTION] Queue submission failed." };
+			return;
+		}
+	};
+#endif
+
+
 #if VKTL_HAVE_WINDOW
 	struct present_payload : compiled_payload {
+		static constexpr bool fence_capable = false;
 		present_payload() { bind_payload<present_payload>(); }
 
 		uint32_t queue = uint32_t(invalid);
@@ -207,7 +304,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 			results.resize(swapchains.size());
 		}
 
-		void materialize_storage(compiled_task const&) {
+		void prepare_submit_storage(compiled_task const&) {
 			for (uint32_t index = 0u; index < uint32_t(swapchains.size()); ++index) {
 				handles[index] = swapchains[index].handle();
 				image_indices[index] = swapchains[index].frame_index();
@@ -217,7 +314,8 @@ VKTL_EXPORT_ namespace vktl::detail {
 			}
 		}
 
-		static void invoke(VK_ VkQueue queue_handle, void const* storage) {
+		static void invoke(VK_ VkQueue queue_handle, void const* storage,
+			VK_ VkFence) {
 			auto& self = *const_cast<present_payload*>(
 				static_cast<present_payload const*>(storage));
 			VK_ VkPresentInfoKHR info{
@@ -239,6 +337,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 #endif
 
 	struct sparse_bind_payload : compiled_payload {
+		static constexpr bool fence_capable = true;
 		sparse_bind_payload() { bind_payload<sparse_bind_payload>(); }
 
 		uint32_t queue = uint32_t(invalid);
@@ -255,7 +354,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 			signal_handles.resize(signals.size());
 		}
 
-		void materialize_storage(compiled_task const&) {
+		void prepare_submit_storage(compiled_task const&) {
 			for (uint32_t index = 0u; index < uint32_t(waits.size()); ++index) {
 				wait_handles[index] = waits[index].handle();
 			}
@@ -264,7 +363,8 @@ VKTL_EXPORT_ namespace vktl::detail {
 			}
 		}
 
-		static void invoke(VK_ VkQueue queue_handle, void const* storage) {
+		static void invoke(VK_ VkQueue queue_handle, void const* storage,
+			VK_ VkFence completion) {
 			auto& self = *static_cast<sparse_bind_payload const*>(storage);
 			VK_ VkBindSparseInfo info{
 				.sType = VK_ VK_STRUCTURE_TYPE_BIND_SPARSE_INFO,
@@ -275,36 +375,62 @@ VKTL_EXPORT_ namespace vktl::detail {
 				.signalSemaphoreCount = uint32_t(self.signal_handles.size()),
 				.pSignalSemaphores = self.signal_handles.data(),
 			};
-			VK_ vkQueueBindSparse(queue_handle, 1u, &info, VK_NULL_HANDLE)
+			VK_ vkQueueBindSparse(queue_handle, 1u, &info, completion)
 				| popup{ "[EXECUTION] Sparse queue binding failed." };
+		}
+	};
+
+	struct submission_slot {
+		submission_state state = submission_state::complete;
+		vector<VK_ VkFence> completions;
+		vector<uint8_t> completion_submitted;
+		uint32_t successful_operations = 0u;
+	};
+
+	struct task_submission {
+		uint64_t generation = 0u;
+		bool accepted = false;
+		void* owner = nullptr;
+		compiled_task* state = nullptr;
+		submission_slot* slot = nullptr;
+		bool (*ready_)(void*, compiled_task&, submission_slot&) = nullptr;
+		void (*wait_)(void*, compiled_task&, submission_slot&) = nullptr;
+		explicit operator bool() const noexcept { return accepted; }
+		bool ready() const {
+			return !accepted || ready_(owner, *state, *slot);
+		}
+		void wait() const {
+			if (accepted) wait_(owner, *state, *slot);
 		}
 	};
 
 	struct compiled_task : poly_list::node {
 		uint64_t generation = 0u;
-		uint64_t last_submit_epoch = uint64_t(invalid);
-		command_pool_group_id pool_group = 0u;
+		generation_state state = generation_state::staging;
 		poly_list commands;
 		poly_list policies;
 		poly_list payloads;
+		poly_list command_pools;
 		vector<command_unit*> command_index;
 		vector<queue_operation> operations;
-		uint32_t operation_count = 0u;
+		vector<uint32_t> completion_operations;
+		vector<submission_slot> submission_slots;
+		uint32_t in_flight_submissions = 0u;
+		record_job_group reclaim_jobs;
+		bool reclaim_dispatched = false;
 		uint64_t fingerprint = recipe_hash_basis;
+		::std::exception_ptr terminal_error;
 
-		void materialize() {
-			operation_count = 0u;
+		void prepare_submit() {
 			for (auto& node : payloads) {
 				auto& payload = node.as<compiled_payload>();
 				if (!payload.enabled()) continue;
-				payload.materialize(*this);
-				assert(operation_count < operations.size());
-				operations[operation_count++] = payload.operation;
+				payload.prepare_submit(*this);
 			}
 		}
 	};
 
-	inline void submit_payload::materialize_storage(compiled_task const& task) {
+	inline void submit_payload::prepare_submit_storage(compiled_task const& task) {
 		for (uint32_t index = 0u; index < uint32_t(commands.size()); ++index) {
 			auto command_index = commands[index];
 			assert(command_index < task.command_index.size());
@@ -323,23 +449,6 @@ VKTL_EXPORT_ namespace vktl::detail {
 		write(waits, 0u);
 		write(signals, uint32_t(waits.size()));
 
-#if defined(VK_KHR_synchronization2)
-		for (uint32_t index = 0u; index < uint32_t(command_handles.size()); ++index) {
-			command_infos[index] = VK_ VkCommandBufferSubmitInfoKHR{
-				.sType = VK_ VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO_KHR,
-				.commandBuffer = command_handles[index],
-			};
-		}
-		for (uint32_t index = 0u; index < uint32_t(semaphore_values.size()); ++index) {
-			auto const& operand = semaphore_values[index];
-			semaphore_infos[index] = VK_ VkSemaphoreSubmitInfoKHR{
-				.sType = VK_ VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO_KHR,
-				.semaphore = operand.handle,
-				.value = operand.value,
-				.stageMask = operand.stage,
-			};
-		}
-#endif
 		for (uint32_t index = 0u; index < uint32_t(semaphore_values.size()); ++index) {
 			legacy_semaphores[index] = semaphore_values[index].handle;
 			legacy_values[index] = semaphore_values[index].value;
@@ -347,7 +456,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 		}
 	}
 
-	template<typename Object>
+	template<object_of<frame_scope> Object>
 	box<vptr::frame_related> make_frame_scope_box(Object& object) {
 		return box<vptr::frame_related>{ object };
 	}
@@ -379,8 +488,18 @@ VKTL_EXPORT_ namespace vktl::detail {
 			static void invoke(void* data) {
 				auto& self = *static_cast<record_request*>(data);
 				if (!self.revisions_match()) return;
-				auto handle = self.execution->allocate_command_buffer(
-					self.command->worker_index, self.command->pool, self.command->level);
+				assert(self.command->pool && self.command->pool->handle);
+				VK_ VkCommandBufferAllocateInfo allocation{
+					.sType = VK_ VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+					.commandPool = self.command->pool->handle,
+					.level = self.command->level,
+					.commandBufferCount = 1u,
+				};
+				VK_ VkCommandBuffer handle = VK_NULL_HANDLE;
+				VK_ vkAllocateCommandBuffers(handle_of<vktl::device>(self.execution),
+					&allocation, &handle)
+					| popup{ "[TASK] Failed to allocate a command buffer." };
+				self.command->pool->buffers.emplace_back(handle);
 				VK_ VkCommandBufferBeginInfo begin{
 					.sType = VK_ VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
 					.flags = self.command->usage,
@@ -490,7 +609,6 @@ VKTL_EXPORT_ namespace vktl::detail {
 			auto& payload = staging_.payloads.template emplace_back<submit_payload>();
 			payload.queue = staging_.command_index[command]->queue_index;
 			payload.commands.emplace_back(command);
-			payload.dispatch = execution_.dispatch();
 			payload.fingerprint = recipe_hash_value(payload.fingerprint, payload.queue);
 			payload.fingerprint = recipe_hash_value(payload.fingerprint, command);
 			submits_.emplace_back(::std::addressof(payload));
@@ -499,6 +617,11 @@ VKTL_EXPORT_ namespace vktl::detail {
 			presents_.emplace_back(nullptr);
 #endif
 			return uint32_t(submits_.size() - 1u);
+		}
+
+		void request_completion(uint32_t submit) noexcept {
+			assert(submit < submits_.size());
+			submits_[submit]->request_completion();
 		}
 
 		void add_command_to_submit(uint32_t submit, uint32_t command) {
@@ -568,18 +691,17 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 		bool finish() {
 			finish_description();
-			staging_.pool_group = execution_.acquire_pool_group();
-			acquire_command_pools();
 			expand_frame_variants();
 			finish_fingerprint();
-			if (active_ && equivalent_to(*active_)) {
-				execution_.abandon_pool_group(staging_.pool_group);
-				staging_.pool_group = 0u;
+			if (active_ && active_->state == generation_state::ready
+				&& !active_->terminal_error && equivalent_to(*active_)) {
 				return false;
 			}
+			acquire_command_pools();
 			record_commands();
 			validate_recorded_revisions();
 			prepare_operation_storage();
+			staging_.state = generation_state::ready;
 			return true;
 		}
 
@@ -625,15 +747,41 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 		void acquire_command_pools() {
 			for (auto* command : staging_.command_index) {
-				if (command->policy_view) {
-					command->pool = execution_.acquire_command_pool(staging_.pool_group,
-						command->worker_index, command->queue_family, command->policy_view);
+				auto policy = make_command_pool_policy(command->policy);
+				auto flags = command->policy_view ? command->policy_view.flags : policy.flags;
+				auto fingerprint = command->policy_view
+					? command->policy_view.fingerprint : policy.fingerprint;
+				for (auto& node : staging_.command_pools) {
+					auto& existing = node.as<task_command_pool>();
+					if (existing.worker == command->worker_index
+						&& existing.family == command->queue_family
+						&& existing.flags == flags
+						&& existing.fingerprint == fingerprint) {
+						command->pool = ::std::addressof(existing);
+						break;
+					}
 				}
-				else {
-					auto policy = make_command_pool_policy(command->policy);
-					command->pool = execution_.acquire_command_pool(staging_.pool_group,
-						command->worker_index, command->queue_family, policy);
-				}
+				if (command->pool) continue;
+				auto& pool = staging_.command_pools.template emplace_back<task_command_pool>();
+				pool.worker = command->worker_index;
+				pool.family = command->queue_family;
+				pool.flags = flags;
+				pool.recycle = command->policy_view
+					? command->policy_view.recycle : command->policy;
+				pool.fingerprint = fingerprint;
+				pool.device = handle_of<vktl::device>(&execution_);
+				pool.allocator = execution_.allocation_callbacks();
+				VK_ VkCommandPoolCreateInfo info{
+					.sType = VK_ VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+					.flags = flags,
+					.queueFamilyIndex = command->queue_family,
+				};
+				if (command->policy_view) command->policy_view.apply(info);
+				else policy.apply(info);
+				VK_ vkCreateCommandPool(handle_of<vktl::device>(&execution_), &info,
+					execution_.allocation_callbacks(), &pool.handle)
+					| popup{ "[TASK] Failed to create a command pool." };
+				command->pool = ::std::addressof(pool);
 			}
 		}
 
@@ -742,14 +890,56 @@ VKTL_EXPORT_ namespace vktl::detail {
 		}
 
 		void prepare_operation_storage() {
-			uint32_t count = 0u;
+			staging_.operations.clear();
 			for (auto& node : staging_.payloads) {
 				auto& payload = node.as<compiled_payload>();
 				payload.prepare();
-				if (payload.enabled()) ++count;
+				if (payload.enabled()) staging_.operations.emplace_back(payload.operation);
 			}
-			staging_.operations.resize(count);
-			staging_.operation_count = 0u;
+
+			for (uint32_t operation = 0u;
+				operation < uint32_t(staging_.operations.size()); ++operation) {
+				auto const& value = staging_.operations[operation];
+				if (!value.user_completion) continue;
+				if (!value.fence_capable) {
+					throw error{ int(VK_ VK_ERROR_INITIALIZATION_FAILED),
+						"[TASK] Requested completion payload cannot accept a fence." };
+				}
+				staging_.completion_operations.emplace_back(operation);
+			}
+			for (uint32_t operation = 0u;
+				operation < uint32_t(staging_.operations.size()); ++operation) {
+				auto const& value = staging_.operations[operation];
+				if (!value.fence_capable) continue;
+				bool later_on_queue = false;
+				for (uint32_t later = operation + 1u;
+					later < uint32_t(staging_.operations.size()); ++later) {
+					if (staging_.operations[later].fence_capable
+						&& staging_.operations[later].queue_index == value.queue_index) {
+						later_on_queue = true;
+						break;
+					}
+				}
+				if (!later_on_queue && ::std::ranges::find(
+					staging_.completion_operations, operation)
+					== staging_.completion_operations.end()) {
+					staging_.completion_operations.emplace_back(operation);
+				}
+			}
+			if (!staging_.operations.empty() && staging_.completion_operations.empty()) {
+				throw error{ int(VK_ VK_ERROR_INITIALIZATION_FAILED),
+					"[TASK] Submission has no completion-capable payload." };
+			}
+
+			staging_.submission_slots.resize(2u);
+			for (auto& slot : staging_.submission_slots) {
+				slot.completions.reserve(staging_.completion_operations.size());
+				slot.completion_submitted.resize(staging_.completion_operations.size());
+				for (uint32_t index = 0u;
+					index < uint32_t(staging_.completion_operations.size()); ++index) {
+					slot.completions.emplace_back(execution_.create_completion_fence(true));
+				}
+			}
 		}
 
 		Execution& execution_;
@@ -773,6 +963,14 @@ VKTL_EXPORT_ namespace vktl::detail {
 		template<typename Object>
 		command_context& depends(Object& object) {
 			builder_->add_dependency(command_, object);
+			return *this;
+		}
+
+		template<typename Source, typename Destination>
+		command_context& depends(Source& source, Destination& destination) {
+			validate_frame_dependency(source, destination);
+			builder_->add_dependency(command_, source);
+			builder_->add_dependency(command_, destination);
 			return *this;
 		}
 
@@ -944,6 +1142,11 @@ VKTL_EXPORT_ namespace vktl::detail {
 			return *this;
 		}
 
+		submit_context& completion() noexcept {
+			builder_->request_completion(submit_);
+			return *this;
+		}
+
 #if VKTL_HAVE_WINDOW
 		template<typename Swapchain>
 		submit_context& present(Swapchain& swapchain) {
@@ -999,15 +1202,13 @@ VKTL_EXPORT_ namespace vktl::detail {
 			: N{ static_cast<N&&>(other) }
 			, fn_{ ::std::move(other.fn_) }
 			, compiled_{ ::std::move(other.compiled_) }
-			, active_{ ::std::exchange(other.active_, nullptr) }
-			, registration_id_{ ::std::exchange(other.registration_id_, 0u) }
-			, selected_epoch_{ ::std::exchange(other.selected_epoch_, uint64_t(invalid)) } {
+			, active_{ ::std::exchange(other.active_, nullptr) } {
 			assert(!other.refreshing_ && other.recording_jobs_ == 0u);
 		}
 
 		m& operator=(m&&) = delete;
 
-		~m() { detach_and_release(); }
+		~m() { release_all(); }
 
 		void refresh() {
 			auto* execution = parent_of<vktl::execution>(this);
@@ -1026,103 +1227,251 @@ VKTL_EXPORT_ namespace vktl::detail {
 					return;
 				}
 				// All potentially throwing preparation is complete.
+				if (active_) active_->state = generation_state::retiring;
 				active_ = ::std::addressof(staging);
 				collect_completed_states();
 			}
 			catch (...) {
-				execution->abandon_pool_group(staging.pool_group);
+				destroy_generation(staging);
 				compiled_.erase(staging);
 				throw;
 			}
 		}
 
-		void submit(bool selected = true) {
-			auto _ = locker_of(this);
-			if (!active_) {
-				throw error{ int(VK_ VK_ERROR_INITIALIZATION_FAILED),
-					"[TASK] refresh() is required before submit()." };
+		task_submission submit(submit_policy policy = {}) {
+			auto* execution = parent_of<vktl::execution>(this);
+			execution->init();
+			bool needs_refresh = false;
+			{
+				auto _ = locker_of(this);
+				collect_completed_states();
+				needs_refresh = !active_ || active_->terminal_error
+					|| !current_revisions_match(*active_);
 			}
-			auto epoch = parent_of<vktl::execution>(this)->current_epoch();
-			selected_epoch_ = selected ? epoch : uint64_t(invalid);
+			if (needs_refresh) {
+				if (!policy.allow_refresh) return {};
+				refresh();
+			}
+			auto _ = locker_of(this);
+			auto& generation = *active_;
+			if (generation.terminal_error) ::std::rethrow_exception(generation.terminal_error);
+			if (!current_revisions_match(generation)) {
+				throw error{ int(VK_ VK_ERROR_INITIALIZATION_FAILED),
+					"[TASK] Dependencies changed while preparing submission." };
+			}
+
+			if (generation.in_flight_submissions != 0u
+				&& !all_commands_allow_simultaneous_use(generation)) {
+				if (policy.busy == busy_policy::skip) return {};
+				wait_oldest(generation);
+			}
+			auto* slot = claim_slot(generation);
+			if (!slot) {
+				if (policy.busy == busy_policy::skip) return {};
+				wait_oldest(generation);
+				slot = claim_slot(generation);
+				assert(slot);
+			}
+
+			generation.prepare_submit();
+			slot->state = submission_state::preparing;
+			slot->successful_operations = 0u;
+			::std::ranges::fill(slot->completion_submitted, uint8_t(0u));
+			for (auto fence : slot->completions) execution->reset_completion_fence(fence);
+			slot->state = submission_state::submitting;
+			try {
+				for (uint32_t index = 0u;
+					index < uint32_t(generation.operations.size()); ++index) {
+					VK_ VkFence completion = VK_NULL_HANDLE;
+					for (uint32_t sink = 0u;
+						sink < uint32_t(generation.completion_operations.size()); ++sink) {
+						if (generation.completion_operations[sink] == index) {
+							completion = slot->completions[sink];
+						}
+					}
+					execution->invoke(generation.operations[index], completion);
+					for (uint32_t sink = 0u;
+						sink < uint32_t(generation.completion_operations.size()); ++sink) {
+						if (generation.completion_operations[sink] == index)
+							slot->completion_submitted[sink] = 1u;
+					}
+					++slot->successful_operations;
+				}
+			}
+			catch (...) {
+				auto failure = ::std::current_exception();
+				if (slot->successful_operations == 0u) {
+					slot->state = submission_state::complete;
+				}
+				else {
+					slot->state = submission_state::partial_submission;
+					establish_recovery_completion(generation, *slot);
+					generation.terminal_error = failure;
+					generation.state = generation_state::failed;
+					++generation.in_flight_submissions;
+				}
+				::std::rethrow_exception(failure);
+			}
+			if (generation.operations.empty()) slot->state = submission_state::complete;
+			else {
+				slot->state = submission_state::in_flight;
+				++generation.in_flight_submissions;
+			}
+			return {
+				generation.generation, true, this, ::std::addressof(generation), slot,
+				[](void* owner, compiled_task& state, submission_slot& value) {
+					return static_cast<m*>(owner)->submission_ready(state, value);
+				},
+				[](void* owner, compiled_task& state, submission_slot& value) {
+					static_cast<m*>(owner)->wait_submission(state, value);
+				},
+			};
 		}
 
-		bool selected(uint64_t epoch) const noexcept {
-			return selected_epoch_ == epoch;
-		}
-
-		void materialize(uint64_t epoch) {
-			assert(selected(epoch) && active_);
-			validate_current_revisions(*active_);
-			active_->materialize();
-		}
-
-		cspan<queue_operation> operations() const noexcept {
-			if (!active_) return {};
-			return { active_->operations.data(), active_->operation_count };
-		}
-
-		void submitted(uint64_t epoch) noexcept {
-			assert(selected(epoch) && active_);
-			active_->last_submit_epoch = epoch;
-		}
-
-		void complete(uint64_t) noexcept { collect_completed_states(); }
-
-		void reset() noexcept { detach_and_release(); }
+		void poll() { collect_completed_states(); }
+		void reset() noexcept { release_all(); }
 
 	protected:
-		void finalize() {
-			if constexpr (requires { N::finalize(); }) N::finalize();
-			registration_id_ = parent_of<vktl::execution>(this)->attach_task(*this);
-		}
-
-		void relocate() noexcept {
-			N::relocate();
-			if (registration_id_) {
-				parent_of<vktl::execution>(this)->rebind_task(registration_id_, *this);
-			}
-		}
+		void finalize() { if constexpr (requires { N::finalize(); }) N::finalize(); }
+		void relocate() noexcept { N::relocate(); }
 
 	private:
-		static void validate_current_revisions(compiled_task const& task) {
+		static bool current_revisions_match(compiled_task const& task) noexcept {
 			for (auto* command : task.command_index) {
 				auto const& variant = current_variant(*command);
-				if (!variant.handle) {
-					throw error{ int(VK_ VK_ERROR_INITIALIZATION_FAILED),
-						"[TASK] Command recording is missing; refresh is required." };
-				}
+				if (!variant.handle) return false;
 				for (uint32_t scope = 0u; scope < uint32_t(command->frame_scopes.size()); ++scope) {
 					if (command->frame_scopes[scope].frame_revision(variant.frames[scope])
-						!= variant.revisions[scope]) {
-						throw error{ int(VK_ VK_ERROR_INITIALIZATION_FAILED),
-							"[TASK] A command dependency changed; refresh is required." };
-					}
+						!= variant.revisions[scope]) return false;
 				}
 			}
+			return true;
 		}
 
-		void collect_completed_states() noexcept {
-			if (!registration_id_) return;
+		void collect_completed_states() {
 			auto* execution = parent_of<vktl::execution>(this);
+			for (auto& node : compiled_) {
+				auto& generation = node.template as<compiled_task>();
+				for (auto& slot : generation.submission_slots) {
+					submission_ready(generation, slot);
+				}
+			}
 			while (!compiled_.empty()) {
-				
 				auto& state = compiled_.begin()->template as<compiled_task>();
 				if (::std::addressof(state) == active_) break;
-				if (!execution->epoch_complete(state.last_submit_epoch)) break;
-				execution->release_pool_group(state.pool_group);
+				if (state.in_flight_submissions != 0u) break;
+				if (!state.reclaim_dispatched) {
+					state.reclaim_dispatched = true;
+					for (auto& node : state.command_pools) {
+						auto& pool = node.template as<task_command_pool>();
+						execution->enqueue(pool.worker, record_job{
+							&reclaim_task_command_pool, ::std::addressof(pool),
+							::std::addressof(state.reclaim_jobs) });
+					}
+				}
+				if (!state.reclaim_jobs.ready()) break;
+				state.reclaim_jobs.wait();
+				destroy_generation(state);
 				compiled_.pop_front();
 			}
 		}
 
-		void detach_and_release() noexcept {
-			if (!registration_id_) return;
-			auto* exec = parent_of<vktl::execution>(this);
+		bool submission_ready(compiled_task& generation, submission_slot& slot) {
+			if (slot.state == submission_state::complete) return true;
+			if (slot.state != submission_state::in_flight
+				&& slot.state != submission_state::partial_submission) return false;
+			auto* execution = parent_of<vktl::execution>(this);
+			for (uint32_t sink = 0u; sink < uint32_t(slot.completions.size()); ++sink) {
+				if (slot.completion_submitted[sink]
+					&& !execution->completion_ready(slot.completions[sink])) return false;
+			}
+			slot.state = submission_state::complete;
+			assert(generation.in_flight_submissions != 0u);
+			--generation.in_flight_submissions;
+			return true;
+		}
+
+		void wait_submission(compiled_task& generation, submission_slot& slot) {
+			if (slot.state == submission_state::complete) return;
+			auto* execution = parent_of<vktl::execution>(this);
+			for (uint32_t sink = 0u; sink < uint32_t(slot.completions.size()); ++sink) {
+				if (slot.completion_submitted[sink])
+					execution->wait_completion(slot.completions[sink]);
+			}
+			if (slot.state == submission_state::in_flight
+				|| slot.state == submission_state::partial_submission) {
+				slot.state = submission_state::complete;
+				assert(generation.in_flight_submissions != 0u);
+				--generation.in_flight_submissions;
+			}
+		}
+
+		static bool all_commands_allow_simultaneous_use(compiled_task const& task) noexcept {
+			return ::std::ranges::all_of(task.command_index, [](command_unit const* command) {
+				return bool(command->usage & VK_ VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT);
+			});
+		}
+
+		submission_slot* claim_slot(compiled_task& generation) noexcept {
+			for (auto& slot : generation.submission_slots) {
+				if (slot.state == submission_state::complete) return ::std::addressof(slot);
+			}
+			return nullptr;
+		}
+
+		void wait_oldest(compiled_task& generation) {
+			auto* execution = parent_of<vktl::execution>(this);
+			for (auto& slot : generation.submission_slots) {
+				if (slot.state != submission_state::in_flight
+					&& slot.state != submission_state::partial_submission) continue;
+				for (uint32_t sink = 0u; sink < uint32_t(slot.completions.size()); ++sink) {
+					if (slot.completion_submitted[sink])
+						execution->wait_completion(slot.completions[sink]);
+				}
+				slot.state = submission_state::complete;
+				assert(generation.in_flight_submissions != 0u);
+				--generation.in_flight_submissions;
+				return;
+			}
+		}
+
+		void establish_recovery_completion(compiled_task const& generation,
+			submission_slot& slot) {
+			auto* execution = parent_of<vktl::execution>(this);
+			for (uint32_t sink = 0u;
+				sink < uint32_t(generation.completion_operations.size()); ++sink) {
+				if (slot.completion_submitted[sink]) continue;
+				auto operation = generation.completion_operations[sink];
+				execution->close_queue(generation.operations[operation].queue_index,
+					slot.completions[sink]);
+				slot.completion_submitted[sink] = 1u;
+			}
+		}
+
+		void destroy_generation(compiled_task& generation) noexcept {
+			auto* execution = parent_of<vktl::execution>(this);
+			for (auto& slot : generation.submission_slots) {
+				for (auto fence : slot.completions)
+					execution->destroy_completion_fence(fence);
+				slot.completions.clear();
+			}
+			for (auto& node : generation.command_pools) {
+				auto& pool = node.template as<task_command_pool>();
+				if (pool.handle) reclaim_task_command_pool(::std::addressof(pool));
+			}
+		}
+
+		void release_all() noexcept {
+			auto* execution = parent_of<vktl::execution>(this);
 			assert(!refreshing_ && recording_jobs_ == 0u);
-			assert(selected_epoch_ != exec->current_epoch());
-			assert(::std::ranges::all_of(compiled_, [](compiled_task const& state) { return exec->epoch_complete(state.last_submit_epoch); }));
-			exec->detach_task(::std::exchange(registration_id_, 0u));
-			for (auto const& node : compiled_) {
-				exec->release_pool_group(node.template as<compiled_task>().pool_group);
+			for (auto& node : compiled_) {
+				auto& generation = node.template as<compiled_task>();
+				while (generation.in_flight_submissions != 0u) wait_oldest(generation);
+				if (generation.reclaim_dispatched) {
+					try { generation.reclaim_jobs.wait(); }
+					catch (...) { ::std::terminate(); }
+				}
+				destroy_generation(generation);
 			}
 			compiled_.clear();
 			active_ = nullptr;
@@ -1131,8 +1480,6 @@ VKTL_EXPORT_ namespace vktl::detail {
 		Fn fn_;
 		poly_list compiled_;
 		compiled_task* active_ = nullptr;
-		uint64_t registration_id_ = 0u;
-		uint64_t selected_epoch_ = uint64_t(invalid);
 		bool refreshing_ = false;
 		uint32_t recording_jobs_ = 0u;
 	};

@@ -832,12 +832,29 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 		template<::std::ranges::contiguous_range Vec, typename Fn, typename...Ts>
 		VK_ VkResult operator()(Vec& vec, Fn call, Ts...vals) const noexcept {
-			return operator()([&](auto count) { vec.resize(count); return vec; }, call, ::std::move(vals)...);
+			return operator()([&](auto count) -> Vec& { vec.resize(count); return vec; }, call, ::std::move(vals)...);
 		}
 		template<::std::ranges::contiguous_range Vec, typename Fn, typename...Ts>
 		VK_ VkResult operator()(Vec& vec, ::std::ranges::range_value_t<Vec> def, Fn call, Ts...vals) const noexcept {
-			return operator()([&](auto count) { vec.resize(count, def); return vec; }, call, ::std::move(vals)...);
+			return operator()([&](auto count) -> Vec& { vec.resize(count, def); return vec; }, call, ::std::move(vals)...);
 		}
 	} vkget{};
 
+	struct vkconnect_ {
+		static constexpr auto impl(auto& first, auto& second, auto&...rest) {
+			first.pNext = &second;
+			impl(second, rest...);
+		}
+		static constexpr auto impl(auto& first) {}
+		static constexpr auto impl() {}
+
+		constexpr void operator()(auto&...rest) const noexcept {
+			impl(rest...);
+		}
+		template<typename...Ts>
+		constexpr void operator()(::std::tuple<Ts...>& ts) const noexcept {
+			::std::apply(vkconnect_(), ts);
+		}
+
+	} vkconnect{};
 }

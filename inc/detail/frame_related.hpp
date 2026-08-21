@@ -8,17 +8,17 @@
 // --------------------------------------------------------------------------
 
 VKTL_EXPORT_ namespace vktl::detail {
-
+	using vktl::frame_scope_id;
 	struct frame_scope; // tag for frame related objects.
 
 	inline frame_scope_id allocate_frame_scope_id() noexcept {
-		static ::std::atomic<frame_scope_id> next{ 1u };
+		static::std::atomic<frame_scope_id> next{ 1u };
 		return next.fetch_add(1u, ::std::memory_order_relaxed);
 	}
 
 	template<typename N>
 	struct basic_frame_indexed : N {
-		static constexpr auto have_frame_scope = parent_have<N, frame_scope>;
+		static constexpr auto have_frame_scope = have_parent_of<N, frame_scope>;
 
 		basic_frame_indexed(auto&&...others)
 			: N{ forward_(others)... }
@@ -53,9 +53,6 @@ VKTL_EXPORT_ namespace vktl::detail {
 			return parent_of<frame_scope>(this)->frame_revision(frame);
 		}
 	};
-
-
-	// helper classes.
 
 	template<typename N, typename Trait>
 	struct basic_frame_indexed_handle : basic_frame_indexed<N> {
@@ -238,7 +235,7 @@ VKTL_EXPORT_ namespace vktl::vptr {
 		template<typename C>
 		struct apply;
 
-		vfn<frame_scope_id() const noexcept> frame_scope_ = nullptr;
+		vfn<detail::frame_scope_id() const noexcept> frame_scope_ = nullptr;
 		vfn<uint32_t() const noexcept> frame_index_ = nullptr;
 		vfn<uint32_t() const noexcept> frame_count_ = nullptr;
 		vfn<uint64_t(uint32_t) const noexcept> frame_revision_ = nullptr;
@@ -266,7 +263,7 @@ VKTL_EXPORT_ namespace vktl::vptr {
 			};
 		}
 
-		frame_scope_id frame_scope_identity() const noexcept {
+		detail::frame_scope_id frame_scope_identity() const noexcept {
 			return vptr_.frame_scope_(C::get_this());
 		}
 		uint32_t frame_index() const noexcept {

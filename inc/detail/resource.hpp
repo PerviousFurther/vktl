@@ -9,7 +9,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 	// tag constraint for resource.
 	struct resource;
 
-	struct memory_flags_t {
+	struct default_memory_flags {
 		VK_ VkMemoryPropertyFlags property = 0u;
 		VK_ VkMemoryHeapFlags heap = 0u;
 	};
@@ -46,7 +46,7 @@ VKTL_EXPORT_ namespace vktl::vptr {
 
 	template<typename Trait>
 	struct memory_resource {
-		using memory_flags_t = detail::memory_flags_t;
+		using default_memory_flags = detail::default_memory_flags;
 		using handle_type = typename Trait::handle_type;
 #if defined(VK_KHR_get_memory_requirements2)
 		using ext_memreq = VK_ VkMemoryRequirements2KHR;
@@ -65,19 +65,19 @@ VKTL_EXPORT_ namespace vktl::vptr {
 
 			template<typename T>
 			void rebind() {
-				if constexpr (requires (T & v) { { v.memory_flags() } -> ::std::convertible_to<span<memory_flags_t const>>; }) {
-					vptr_.memories_flags_ = [](void const* ptr) -> span<memory_flags_t const> {
+				if constexpr (requires (T & v) { { v.memory_flags() } -> ::std::convertible_to<span<default_memory_flags const>>; }) {
+					vptr_.memories_flags_ = [](void const* ptr) -> span<default_memory_flags const> {
 						return static_cast<T const*>(ptr)->memory_flags();
 						};
 				}
-				else if (requires (T & v) { { v.memory_flags() } -> ::std::convertible_to<memory_flags_t>; }) {
-					vptr_.memory_flags_ = [](void const* ptr) -> memory_flags_t {
+				else if (requires (T & v) { { v.memory_flags() } -> ::std::convertible_to<default_memory_flags>; }) {
+					vptr_.memory_flags_ = [](void const* ptr) -> default_memory_flags {
 						return static_cast<T const*>(ptr)->memory_flags();
 					};
 				}
 				else {
 					vptr_.memory_flags_ = [](void const*) {
-						return memory_flags_t(0u);
+						return default_memory_flags(0u);
 						};
 				}
 #if defined(VK_KHR_get_memory_requirements2)
@@ -108,8 +108,8 @@ VKTL_EXPORT_ namespace vktl::vptr {
 #endif
 			bool multiple() const noexcept { return vptr_.memories_flags_; }
 
-			memory_flags_t memory_flags() const noexcept { return vptr_.memory_flags_(C::get_this()); }
-			memory_flags_t memories_flags() const noexcept { return vptr_.memories_flags_(C::get_this()); }
+			default_memory_flags memory_flags() const noexcept { return vptr_.memory_flags_(C::get_this()); }
+			default_memory_flags memories_flags() const noexcept { return vptr_.memories_flags_(C::get_this()); }
 
 			memory_resource vptr_;
 		};
@@ -117,8 +117,8 @@ VKTL_EXPORT_ namespace vktl::vptr {
 #if defined(VK_KHR_get_memory_requirements2)
 		vfn<void(ext_memreq&, uint32_t) const> memory_requirement_;
 #endif
-		vfn<memory_flags_t() const> memory_flags_;
-		vfn<span<memory_flags_t const>() const> memories_flags_;
+		vfn<default_memory_flags() const> memory_flags_;
+		vfn<span<default_memory_flags const>() const> memories_flags_;
 		vfn<bool() const> is_tiling_;
 	};
 }
@@ -214,7 +214,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 				uint32_t type_bits = 0u;
 				uint32_t type_index;
 			};
-			memory_flags_t flags = {};
+			default_memory_flags flags = {};
 		};
 
 		using allocate = VK_ VkMemoryAllocateInfo;
@@ -456,7 +456,9 @@ VKTL_EXPORT_ namespace vktl::detail {
 				.pNext = req_ptr,
 			};
 			N::each(child, info, &req);
-			if (req.prefersDedicatedAllocation || req.requiresDedicatedAllocation) {
+			// TODO: what strategy handle with prefer?
+			if (/*req.prefersDedicatedAllocation || */ req.requiresDedicatedAllocation) {
+				info.directly_allocate = true;
 				info.alloc_mask |= memory::dedicated_bit;
 			}
 		}
@@ -656,8 +658,8 @@ VKTL_EXPORT_ namespace vktl::detail {
 			infos.reserve(childs.size());
 			uint16_t child_index = 0u;
 			for (auto& child : childs) {
-				memory_flags_t flags;
-				span<memory_flags_t const> sflags;
+				default_memory_flags flags;
+				span<default_memory_flags const> sflags;
 				if (child.multiple()) {
 					sflags = child.memories_flags();
 				}
@@ -681,7 +683,6 @@ VKTL_EXPORT_ namespace vktl::detail {
 						for (auto i = 0u; i < frame_count; i++) {
 							result.subres_index++;
 							allocate(state, child, result);
-							
 						}
 					}
 					else {
@@ -700,7 +701,6 @@ VKTL_EXPORT_ namespace vktl::detail {
 							it->allocation.emplace_back(result);
 						}
 					}
-
 					subres_index++;
 				}
 				child_index++;
@@ -1203,8 +1203,11 @@ VKTL_EXPORT_ namespace vktl::detail {
 		}
 	};
 
-
 	using namespace resource_extensions;
+
+	// struct default_resource_memory : default_memory_flags {
+	// 	vector<bind_memory> memories;
+	// };
 
 	template<typename N, typename Trait>
 	struct basic_resource : basic_frame_indexed_handle<N, Trait> {
@@ -1213,71 +1216,79 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 		basic_resource(auto&&...others)
 			: base{ forward_(others)... } {
-
 		}
 
-		span<memory_flags_t const> memory_flags() const noexcept {
+		span<default_memory_flags const> memory_flags() const noexcept {
 			return memories_.column<0u>();
 		}
 
 		void bind(bind_memory const& memory) noexcept {
-			bind(memory, this->frame_index());
-		}
-
-		void bind(bind_memory const& memory, uint32_t index) noexcept {
-			assert(!memories_.empty()); // test.
 			auto _ = locker_of(this);
+			assert(!memories_.empty());
 			assert(::std::ranges::all_of(memories_.column<1u>(),
-				[](auto const& value) { return value.empty(); })); // test.
-			assert(index < this->frame_count()); // test, usually not.
-			Trait::bind_memory(handle_of<device>(this), this->handle(index), memory.handle(), memory.offset)
+				[](auto const& value) { return value.empty(); })); // internal test, resource cannot bind twice.
+			assert(memory.index < this->frame_count()); // internal test, out of range usually.
+			Trait::bind_memory(handle_of<device>(this), this->handle(memory.index), memory.handle(), memory.offset)
 				| popup{ "[BIND MEMORY] Bind memory failure." };
 		}
 
 	protected:
-#if defined(VK_KHR_bind_memory2)
-		void bind(bind_memory const& memory, ::std::span<void*> ptrs) noexcept {
-			assert(!memories_.empty());
+	#if defined(VK_KHR_bind_memory2)
+		// ptrs should [subres_index * frame_count], and can be access by [frame_index * subres_count + subres_index].
+		void bind(bind_memory const& memory, span<void*> ptrs) noexcept {
 			auto _ = locker_of(this);
+			const auto frame_count = this->frame_count();
 			vector<typename Trait::bind_memory_info> binds;
 			binds.reserve(ptrs.size());
-			auto index = 0u;
-			for (auto ptr : ptrs) {
-				// const auto subres_index = index / this->frame_count();
-				const auto handle_index = index % this->frame_count();
-				binds.emplace_back(Trait::memory_info(ptr, this->handle(handle_index), memory.handle(), memory.offset));
-				index++;
+			
+			// [subres index][frame index]
+			memories_.column<1u>()[memory.index / memories_.size()][memory.index % frame_count] = memory;
+			if (memory.index == memories_.size() * frame_count) {
+				vector<typename Trait::bind_memory_info> binds;
+				binds.reserve(memories_.size());
+				for (auto frame_index = 0u; frame_index < frame_count; frame_index++) {
+					auto index = frame_index * frame_count;
+					auto subres_index = 0u;
+					for (auto pnext : ptrs.subspan(index, index + this->memories_.size())) {
+						bind_memory& memory = memories_.column<1u>()[subres_index][frame_index];
+						binds.emplace_back(Trait::memory_info(pnext, this->handle(frame_index), memory.handle(), memory.offset));
+						subres_index++;
+					}
+					Trait::bind_memory_2(handle_of<device>(this), uint32_t(binds.size()), binds.data())
+						| popup{ "[BIND MEMORY] Bind memory failure." };
+					binds.clear();
+				}
 			}
-			Trait::bind_memory_2(handle_of<device>(this), uint32_t(binds.size()), binds.data())
-				| popup{ "[BIND MEMORY] Bind memory failure." };
 		}
-#endif
+	#endif
 
-		void memory_flags(memory_flags_t flags, uint32_t index = 0u) noexcept {
-			if (memories_.size() <= index) {
-				memories_.resize(index + 1u, memory_flags_t{}, bind_memory{});
+		void memory_flags(default_memory_flags flags, uint32_t subres_index = 0u) noexcept {
+			if (memories_.size() <= subres_index) {
+				memories_.resize(subres_index + 1u);
 			}
-			else {
-				memories_.column<0u>()[index] = flags;
-			}
+			memories_.column<0u>()[subres_index] = flags;
+			memories_.column<1u>()[subres_index].resize(this->frame_count());
 		}
 
 	private:
-		vectors<memory_flags_t, bind_memory> memories_;
+		// visit memory: [subresource, frame_index]
+		vectors<default_memory_flags, vector<bind_memory>> memories_;
 	};
-
-	//::std::span<int> w = ::std::initializer_list<int>{0, 1};
 
 	template<typename N>
 	struct m<mappable_, N> : N {
 		constexpr m(mappable_, auto&&...others)
 			: N{ forward_(others)... } {
-			N::memory_flags(memory_flags_t{
+			N::memory_flags(default_memory_flags{
 				.property = VK_ VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
 			});
 		}
 
+		auto memory_flags() const noexcept { return N::memory_flags(); }
+
 		void upload(byte_view data, size_t offset = maximum) {
+			auto _ = locker_of(this);
+
 			if (offset == maximum) {
 				offset = bytes_.size();
 			}
@@ -1299,6 +1310,16 @@ VKTL_EXPORT_ namespace vktl::detail {
 			upload(byte_view{ list.begin(), list.end() }, offset);
 		}
 
+		// void upload() {
+		// 	auto _ = locker_of(this);
+		//
+		// }
+
+	protected:
+		void memory_flags(default_memory_flags flags, uint32_t subres_index = 0u) noexcept {
+			flags.property |= VK_ VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
+			N::memory_flags(flags, subres_index);
+		}
 
 	private:
 		vector<::std::byte> bytes_;

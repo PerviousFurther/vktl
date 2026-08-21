@@ -86,19 +86,24 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 		~m() { reset(); }
 
-		void init() {
-			N::init();
-			auto _ = locker_of(this);
+		auto init() {
+			auto locker = N::init();
 			if (base::is_null()) {
 				this->generate(info, "[BUFFER] Create buffer failure.");
 			}
+			return locker;
 		}
 
-		void reset() {
-			auto _ = locker_of(this);
+		auto reset() {
+			auto locker = N::reset();
 			if (!base::is_null()) {
 				this->destroy();
 			}
+			return locker;
+		}
+
+		size_t size() const noexcept { 
+			return info.size;
 		}
 
 		void append_usage(VK_ VkBufferUsageFlags usages) noexcept {
@@ -108,7 +113,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 		}
 
 		VK_ VkMemoryBarrier append_access(default_buffer_access const& access) {
-			// access_.insert(access);
+			assert(false); // not implmented yet.
 		}
 
 	protected:
@@ -124,39 +129,30 @@ VKTL_EXPORT_ namespace vktl::detail {
 	template<typename N>
 	struct m<buffer_view_, N> : N {
 		constexpr m(buffer_view_ buffer_view, auto&&...others)
-			: N{ forward_(others)... }
-			, info{
-				.sType = VK_ VK_STRUCTURE_TYPE_BUFFER_VIEW_CREATE_INFO,
-				.offset = 0u,
-				.range = maximum,
-			}
-		{
+			: N{ forward_(others)... } { 
+			info.range = parent_of<buffer>(this)->size();
 		}
 
 		~m() { reset(); }
 
-		void init() {
-			N::init();
-
-			auto _ = locker_of(this);
-			// if (handle_) {
-			// 	// this->generate(info, "[BUFFER_VIEW] Create buffer failure.");
-			// 	VK_ vkCreateBufferView(handle_of<device>(this), &info, N::allocator(), &handle_)
-			// 		| popup{ "[BUFFER_VIEW] Create buffer view failure." };
-			// }
+		auto init() {
+			auto locker = N::init();
+			assert(info.range); // not allow no size buffer view.
+			if (!handle_ && info.format != VK_ VK_FORMAT_UNDEFINED) {
+				// this->generate(info, "[BUFFER_VIEW] Create buffer failure.");
+				VK_ vkCreateBufferView(handle_of<device>(this), &info, N::allocator(), &handle_)
+					| popup{ "[BUFFER_VIEW] Create buffer view failure." };
+			}
+			return locker;
 		}
 
-		void reset() {
-			auto _ = locker_of(this);
-			// if (handle_) {
-			// 	for (auto child : childs_) {
-			// 		child.reset();
-			// 	}
-			// 
-			// 	::std::lock_guard _{ N::get_lock() };
-			// 	VK_ vkDestroyBufferView(handle_of<device>(this),
-			// 		exchange(handle_, VK_NULL_HANDLE), N::allocator());
-			// }
+		auto reset() {
+			auto locker = N::reset();
+			if (handle_) {
+				VK_ vkDestroyBufferView(handle_of<device>(this),
+					exchange(handle_, VK_NULL_HANDLE), N::allocator());
+			}
+			return locker;
 		}
 
 		void upload_access() {
@@ -193,11 +189,13 @@ VKTL_EXPORT_ namespace vktl::detail {
 		}
 
 	protected:
-		VK_ VkBufferViewCreateInfo info;
+		VK_ VkBufferViewCreateInfo info {
+			.sType = VK_ VK_STRUCTURE_TYPE_BUFFER_VIEW_CREATE_INFO,
+		};
 
 	private:
-		reset_if_copy<VK_ VkBufferView> handle_;
-		descriptor_handle descriptor_;
+		reset_if_copy<descriptor_handle> descriptor_{nullptr};
+		reset_if_copy<VK_ VkBufferView> handle_{VK_NULL_HANDLE};
 	};
 
 

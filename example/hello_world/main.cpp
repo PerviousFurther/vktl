@@ -25,8 +25,7 @@ int main() {
 
 	object dev
 		= ins
-		| device{ .index = 0u }
-	| device_extensions::queue_family{ .family = 0u, .count = 1u };
+		| device{ .index = 0u };
 
 	object alc
 		= dev
@@ -150,7 +149,6 @@ int main() {
 		// 	0.0f, 0.0f, 0.0f, 1.0f,
 		// });
 		
-		draw_triangle.submit();
-		exec.submit(); 
+		exec.submit(draw_triangle);
 	}
 }

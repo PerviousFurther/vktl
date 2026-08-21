@@ -190,6 +190,157 @@ VKTL_EXPORT_ namespace vktl::detail {
 	protected:
 		VK_ VkImageViewCreateInfo info;
 	};
+	
+	namespace format {
+		constexpr uint32_t compress_image_bits(uint16_t bits) noexcept {
+			switch (bits) {
+			case uint16_t(invalid):return 0u;
+			case 8u:      return 1u;
+			case 16u:     return 2u;
+			case 24u:     return 3u;
+			case 32u:     return 4u;
+			case 64u:     return 5u;
+			default:      return 7u;
+			}
+		}
 
+		constexpr uint32_t compress_image_type(uint16_t type) noexcept {
+			using namespace image_bits_type;
+			switch (type) {
+			case undefined: return 0u;
+			case unorm:     return 1u;
+			case uint:      return 2u;
+			case snorm:     return 3u;
+			case sint:      return 4u;
+			case sfloat:    return 5u;
+			default:        return 7u;
+			}
+		}
 
+		constexpr uint32_t pack_color_format(image_format::format_color const& value) noexcept {
+			auto type = [](uint16_t bits, uint16_t kind) {
+				return compress_image_type(bits == invalid ? image_bits_type::undefined : kind);
+				};
+			return (uint32_t(value.order) << 24u)
+				| (compress_image_bits(value.rbits) << 20u)
+				| (compress_image_bits(value.gbits) << 17u)
+				| (compress_image_bits(value.bbits) << 14u)
+				| (compress_image_bits(value.abits) << 11u)
+				| (type(value.rbits, value.rtype) << 8u)
+				| (type(value.gbits, value.gtype) << 5u)
+				| (type(value.bbits, value.btype) << 2u)
+				| type(value.abits, value.atype);
+		}
+
+		constexpr uint32_t color_format_case(uint16_t order, uint16_t r, uint16_t g,
+			uint16_t b, uint16_t a, uint16_t type) noexcept {
+			return pack_color_format(image_format::format_color{
+				.order = order,
+				.rbits = r,
+				.gbits = g,
+				.bbits = b,
+				.abits = a,
+				.rtype = type,
+				.gtype = type,
+				.btype = type,
+				.atype = type,
+				});
+		}
+
+		constexpr VK_ VkFormat to_vkformat(image_format::format_color const& value) noexcept {
+			using namespace image_bits_order;
+			using namespace image_bits_type;
+			constexpr uint16_t n = invalid;
+			switch (pack_color_format(value)) {
+			case color_format_case(rgba, 8, n, n, n, unorm): return VK_ VK_FORMAT_R8_UNORM;
+			case color_format_case(rgba, 8, n, n, n, snorm): return VK_ VK_FORMAT_R8_SNORM;
+			case color_format_case(rgba, 8, n, n, n, uint): return VK_ VK_FORMAT_R8_UINT;
+			case color_format_case(rgba, 8, n, n, n, sint): return VK_ VK_FORMAT_R8_SINT;
+			case color_format_case(rgba, 16, n, n, n, unorm): return VK_ VK_FORMAT_R16_UNORM;
+			case color_format_case(rgba, 16, n, n, n, snorm): return VK_ VK_FORMAT_R16_SNORM;
+			case color_format_case(rgba, 16, n, n, n, uint): return VK_ VK_FORMAT_R16_UINT;
+			case color_format_case(rgba, 16, n, n, n, sint): return VK_ VK_FORMAT_R16_SINT;
+			case color_format_case(rgba, 16, n, n, n, sfloat): return VK_ VK_FORMAT_R16_SFLOAT;
+			case color_format_case(rgba, 32, n, n, n, uint): return VK_ VK_FORMAT_R32_UINT;
+			case color_format_case(rgba, 32, n, n, n, sint): return VK_ VK_FORMAT_R32_SINT;
+			case color_format_case(rgba, 32, n, n, n, sfloat): return VK_ VK_FORMAT_R32_SFLOAT;
+			case color_format_case(rgba, 8, 8, n, n, unorm): return VK_ VK_FORMAT_R8G8_UNORM;
+			case color_format_case(rgba, 8, 8, n, n, snorm): return VK_ VK_FORMAT_R8G8_SNORM;
+			case color_format_case(rgba, 8, 8, n, n, uint): return VK_ VK_FORMAT_R8G8_UINT;
+			case color_format_case(rgba, 8, 8, n, n, sint): return VK_ VK_FORMAT_R8G8_SINT;
+			case color_format_case(rgba, 16, 16, n, n, unorm): return VK_ VK_FORMAT_R16G16_UNORM;
+			case color_format_case(rgba, 16, 16, n, n, snorm): return VK_ VK_FORMAT_R16G16_SNORM;
+			case color_format_case(rgba, 16, 16, n, n, uint): return VK_ VK_FORMAT_R16G16_UINT;
+			case color_format_case(rgba, 16, 16, n, n, sint): return VK_ VK_FORMAT_R16G16_SINT;
+			case color_format_case(rgba, 16, 16, n, n, sfloat): return VK_ VK_FORMAT_R16G16_SFLOAT;
+			case color_format_case(rgba, 32, 32, n, n, uint): return VK_ VK_FORMAT_R32G32_UINT;
+			case color_format_case(rgba, 32, 32, n, n, sint): return VK_ VK_FORMAT_R32G32_SINT;
+			case color_format_case(rgba, 32, 32, n, n, sfloat): return VK_ VK_FORMAT_R32G32_SFLOAT;
+			case color_format_case(rgba, 8, 8, 8, n, unorm): return VK_ VK_FORMAT_R8G8B8_UNORM;
+			case color_format_case(rgba, 8, 8, 8, n, snorm): return VK_ VK_FORMAT_R8G8B8_SNORM;
+			case color_format_case(rgba, 8, 8, 8, n, uint): return VK_ VK_FORMAT_R8G8B8_UINT;
+			case color_format_case(rgba, 8, 8, 8, n, sint): return VK_ VK_FORMAT_R8G8B8_SINT;
+			case color_format_case(rgba, 16, 16, 16, n, unorm): return VK_ VK_FORMAT_R16G16B16_UNORM;
+			case color_format_case(rgba, 16, 16, 16, n, snorm): return VK_ VK_FORMAT_R16G16B16_SNORM;
+			case color_format_case(rgba, 16, 16, 16, n, uint): return VK_ VK_FORMAT_R16G16B16_UINT;
+			case color_format_case(rgba, 16, 16, 16, n, sint): return VK_ VK_FORMAT_R16G16B16_SINT;
+			case color_format_case(rgba, 16, 16, 16, n, sfloat): return VK_ VK_FORMAT_R16G16B16_SFLOAT;
+			case color_format_case(rgba, 8, 8, 8, 8, unorm): return VK_ VK_FORMAT_R8G8B8A8_UNORM;
+			case color_format_case(rgba, 8, 8, 8, 8, snorm): return VK_ VK_FORMAT_R8G8B8A8_SNORM;
+			case color_format_case(rgba, 8, 8, 8, 8, uint): return VK_ VK_FORMAT_R8G8B8A8_UINT;
+			case color_format_case(rgba, 8, 8, 8, 8, sint): return VK_ VK_FORMAT_R8G8B8A8_SINT;
+			case color_format_case(rgba, 16, 16, 16, 16, unorm): return VK_ VK_FORMAT_R16G16B16A16_UNORM;
+			case color_format_case(rgba, 16, 16, 16, 16, snorm): return VK_ VK_FORMAT_R16G16B16A16_SNORM;
+			case color_format_case(rgba, 16, 16, 16, 16, uint): return VK_ VK_FORMAT_R16G16B16A16_UINT;
+			case color_format_case(rgba, 16, 16, 16, 16, sint): return VK_ VK_FORMAT_R16G16B16A16_SINT;
+			case color_format_case(rgba, 16, 16, 16, 16, sfloat): return VK_ VK_FORMAT_R16G16B16A16_SFLOAT;
+			case color_format_case(rgba, 32, 32, 32, 32, uint): return VK_ VK_FORMAT_R32G32B32A32_UINT;
+			case color_format_case(rgba, 32, 32, 32, 32, sint): return VK_ VK_FORMAT_R32G32B32A32_SINT;
+			case color_format_case(rgba, 32, 32, 32, 32, sfloat): return VK_ VK_FORMAT_R32G32B32A32_SFLOAT;
+			case color_format_case(bgra, 8, 8, 8, 8, unorm): return VK_ VK_FORMAT_B8G8R8A8_UNORM;
+			case color_format_case(bgra, 8, 8, 8, 8, snorm): return VK_ VK_FORMAT_B8G8R8A8_SNORM;
+			case color_format_case(bgra, 8, 8, 8, 8, uint): return VK_ VK_FORMAT_B8G8R8A8_UINT;
+			case color_format_case(bgra, 8, 8, 8, 8, sint): return VK_ VK_FORMAT_B8G8R8A8_SINT;
+			default: return VK_ VK_FORMAT_UNDEFINED;
+			}
+		}
+
+		constexpr VK_ VkFormat to_vkformat(image_format::format_depth const& value) noexcept {
+			using namespace image_bits_type;
+			if (value.dbits == 16u && value.dtype == unorm && value.sbits == invalid)
+				return VK_ VK_FORMAT_D16_UNORM;
+			if (value.dbits == 24u && value.dtype == unorm && value.sbits == invalid)
+				return VK_ VK_FORMAT_X8_D24_UNORM_PACK32;
+			if (value.dbits == 32u && value.dtype == sfloat && value.sbits == invalid)
+				return VK_ VK_FORMAT_D32_SFLOAT;
+			if (value.dbits == invalid && value.sbits == 8u && value.stype == uint)
+				return VK_ VK_FORMAT_S8_UINT;
+			if (value.dbits == 16u && value.dtype == unorm && value.sbits == 8u && value.stype == uint)
+				return VK_ VK_FORMAT_D16_UNORM_S8_UINT;
+			if (value.dbits == 24u && value.dtype == unorm && value.sbits == 8u && value.stype == uint)
+				return VK_ VK_FORMAT_D24_UNORM_S8_UINT;
+			if (value.dbits == 32u && value.dtype == sfloat && value.sbits == 8u && value.stype == uint)
+				return VK_ VK_FORMAT_D32_SFLOAT_S8_UINT;
+			return VK_ VK_FORMAT_UNDEFINED;
+		}
+	}
+	
+
+	template<typename Format>
+	struct basic_format_express {
+		static constexpr void invoke(Format format, auto& base) {
+			auto value = format::to_vkformat(format);
+			assert(value != VK_ VK_FORMAT_UNDEFINED);
+			base.append(value);
+		}
+	};
+
+	template<>
+	struct express<image_format::format_color>
+		: basic_format_express<image_format::format_color> {
+		
+	};
+	template<>
+	struct express<image_format::format_depth>
+		: basic_format_express<image_format::format_depth> {};
 }

@@ -243,6 +243,9 @@ VKTL_EXPORT_ namespace vktl::detail {
 			if (!point.declared()) {
 				point.usage = usage;
 			}
+			else if (point.usage.resource_type != usage.resource_type) {
+				N::bind(usage);
+			}
 			else {
 				assert(point.usage.type == usage.type); // binded resource conflicted.
 				assert(point.usage.set == usage.set); // binded resource conflicted.

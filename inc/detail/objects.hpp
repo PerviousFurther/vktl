@@ -147,12 +147,16 @@ VKTL_EXPORT_ namespace vktl::detail {
 		static constexpr auto parent() noexcept { return nullptr; }
 
 		template<typename Q>
+		static constexpr bool query(::std::in_place_t) noexcept { return ((::std::same_as<Ts, Q>) || ...); }
+		template<typename...Qs> requires(sizeof...(Qs) > 1)
+		static constexpr bool query(::std::in_place_t v) noexcept { return ((query<Qs>(v)) && ...); }
+		template<typename Q>
 		static constexpr bool query() noexcept { return ((is_queryable<Ts, Q>::value) || ...); }
 		template<typename...Qs> requires(sizeof...(Qs) > 1)
 		static constexpr bool query() noexcept { return ((query<Qs>()) && ...); }
 
-		static constexpr void init() noexcept {}
-		static constexpr void reset() noexcept {}
+		static constexpr auto init() noexcept { return nullptr; }
+		static constexpr auto reset() noexcept { return nullptr; }
 
 		static constexpr lock_duck_& get_lock() noexcept { return lock_duck; }
 
@@ -304,12 +308,12 @@ VKTL_EXPORT_ namespace vktl::detail {
 		}
 
 		void init() {
-			base::relocate();
-			base::init();
+			(void)base::relocate();
+			(void)base::init();
 		}
 
 		void reset() {
-			base::reset();
+			(void)base::reset();
 		}
 
 		template<typename O>
@@ -364,7 +368,6 @@ VKTL_EXPORT_ namespace vktl::detail {
 	inline constexpr struct shared_ {} shared;
 	// cross thread shared use atomic reference counter.
 	inline constexpr struct cross_thread_shared_ {} cross_thread_shared;
-
 
 	// template<typename T, typename E>
 	// struct is_extend : ::std::false_type {};
@@ -433,21 +436,29 @@ VKTL_EXPORT_ namespace vktl::detail {
 	}
 
 	template<typename T, typename...Qs>
-	concept object_of = requires(T& v){ v.add_ref(); v.release(); } && T::template query<Qs...>();
-
-	// reserve, maybe change implmentation.
-	template<typename T, typename...Qs>
-	concept chain_contain = object_of<T, Qs...>;
-
-	template<typename T, typename...Qs>
-	concept parent_have = []() constexpr {
-		if constexpr (requires(T& v) { v.template parent<Qs...>(); }) {
-			return!::std::is_null_pointer_v<decltype(::std::declval<T&>().template parent<Qs...>())>;
+	concept object_of = []() constexpr { 
+		if constexpr (requires { T::template query<Qs...>(); }) {
+			return T::template query<Qs...>();
 		}
 		else {
 			return false;
 		}
 	}();
+
+	template<typename T, typename...Qs>
+	concept inside_object = []() constexpr {
+		if constexpr (requires { T::template query<Qs...>(); }) {
+			return T::template query<Qs...>(::std::in_place);
+		}
+		else {
+			return false;
+		}
+	}();
+
+	// reserve, maybe change implmentation.
+	template<typename T, typename...Qs>
+	concept chain_contain = object_of<T, Qs...>;
+
 
 	// template<typename T, typename Q>
 	// concept contain = object_of<T, Q> || parent_of<T, Q>;
@@ -463,26 +474,46 @@ VKTL_EXPORT_ namespace vktl::detail {
 	// 	return::std::get<obtain_<T>::value>(static_cast<Tuple&&>(tuples));
 	// }
 
-	template<typename T, typename N>
-	constexpr auto parent_of(N* pthis)
-		noexcept {
-		return pthis->template parent<T>();
+	template<typename...Qs, typename N>
+	constexpr auto parent_of(N* pthis) noexcept {
+		return pthis->template parent<Qs...>();
 	}
-	template<typename T, typename N>
-	constexpr auto parent_of(N& ref)
-		noexcept {
-		return ref.template parent<T>();
+	template<typename...Qs, typename N>
+	constexpr auto parent_of(N& ref) noexcept {
+		return ref.template parent<Qs...>();
 	}
 
+	template<typename N, typename...Qs>
+	using parent_t = ::std::remove_pointer_t<decltype(::std::declval<N&>().template parent<Qs...>())>;
 
-	template<typename T, typename N>
-	constexpr auto handle_of(N* pthis)
-		noexcept {
-		return parent_of<T>(pthis)->handle();
+	template<typename N, typename...Qs>
+	concept have_parent_of = []() constexpr {
+		if constexpr (requires(N& v) { v.template parent<Qs...>(); }) {
+			return !::std::is_null_pointer_v<parent_t<N, Qs...>>;
+		}
+		else {
+			return false;
+		}
+	}();
+
+	template<typename N, typename P, typename...Qs>
+	concept inside_parent = []() constexpr {
+		if constexpr (requires(N& v) { v.template parent<P>(); }) {
+			return parent_t<N, P>::template query<Qs...>(::std::in_place);
+		}
+		else {
+			return false;
+		}
+	}();
+
+
+	template<typename...Qs, typename N>
+	constexpr auto handle_of(N* pthis) noexcept {
+		return parent_of<Qs...>(pthis)->handle();
 	}
 
 	template<typename N>
-	constexpr auto& lock_of(N* pthis) {
+	constexpr auto& lock_of(N* pthis) noexcept {
 		if constexpr (object_of<N, lockable_>) {
 			return pthis->get_lock();
 		}
@@ -494,11 +525,12 @@ VKTL_EXPORT_ namespace vktl::detail {
 	template<typename N>
 	constexpr auto locker_of(N* pthis) {
 		if constexpr (object_of<N, lockable_>) {
-			return::std::lock_guard(lock_of(pthis));
+			return::std::unique_lock(lock_of(pthis));
 		}
 		else {
 			return nullptr;
 		}
 	}
+
 
 }

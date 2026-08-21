@@ -99,7 +99,6 @@ VKTL_EXPORT_ namespace vktl::detail {
 	template<typename Rt, typename...Args>
 	struct virtual_fn<Rt(Args...) const noexcept> : ::std::type_identity<Rt(*)(void const*, Args...) noexcept> {};
 	
-
 	template<typename T>
 	using vfn = typename virtual_fn<T>::type;
 
@@ -425,10 +424,6 @@ VKTL_EXPORT_ namespace vktl {
 		// some of the object must contain at least one of these object.
 		// this describe task's type.
 
-		// for instance, it might use GET_PHYSICAL_DEVICE_2 and so on.
-		// required Vulkan 1.1.
-		// struct version1_1 {};
-
 		// debug named will also enable in release build.
 		// use it is convenient for gpu debug.
 		struct debug_named {
@@ -452,6 +447,10 @@ VKTL_EXPORT_ namespace vktl {
 		struct debug_utils {
 			detail::box<vptr::debug_callback> callback;
 		};
+		struct version1_1 {};
+		struct version1_2 {};
+		struct version1_3 {};
+		struct version1_4 {};
 		inline constexpr struct validation_layer_ {} validation_layer;
 	}
 
@@ -553,16 +552,17 @@ VKTL_EXPORT_ namespace vktl {
 
 	namespace task_extensions {
 		using extensions::debug_named;
-
-		// in vulkan, free command buffer is an extensions.
-		// extend this from task will allow free command buffer.
-		struct allow_temporary_command_buffers {};
+		inline constexpr struct transient_ {} transient {};
+		inline constexpr struct reset_pool_ {} reset_pool {};
+		inline constexpr struct reset_command_buffer_ {} reset_command_buffer {};
+		inline constexpr struct free_command_buffer_ {} free_command_buffer {};
 	}
 
 	enum class command_pool_policy_kind : uint8_t {
 		generation,
 		transient,
-		individual_reset,
+		reset_command_buffer,
+		free_command_buffer,
 	};
 
 	namespace command_pool_extensions {

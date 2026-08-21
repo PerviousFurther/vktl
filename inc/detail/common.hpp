@@ -438,6 +438,13 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 		m(lockable_, auto&&...others) : N{} {}
 
+		auto init() {
+			return::std::unique_lock(lock_);
+		}
+		auto reset() {
+			return::std::unique_lock(lock_);
+		}
+
 	private:
 		mutable::std::mutex lock_;
 	};
@@ -449,6 +456,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 	struct locked : handle_<T> {
 		using base = handle_<T>;
 
+		// these for handles.
 		locked(T*& value, uint32_t index, lock_duck_ const& lock) 
 			: locked{ nullptr, index, value }
 		{}
@@ -459,6 +467,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 			: locked{ this->lock(lock), index, value }
 		{}
 
+		// these for handle.
 		locked(T& value, lock_duck_ const& lock)
 			: base{ value }
 			, plock_{ nullptr }

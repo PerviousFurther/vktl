@@ -111,10 +111,10 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 		constexpr m(instance const& info, auto&&...others)
 			: base{ forward_(others)... }
-			, info_{
+			, info{
 				.sType = VK_ VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO
 			}
-			, app_{
+			, app{
 				.sType = VK_ VK_STRUCTURE_TYPE_APPLICATION_INFO,
 				.pApplicationName = info.name,
 				.applicationVersion = info.version,
@@ -133,17 +133,17 @@ VKTL_EXPORT_ namespace vktl::detail {
 			N::relocate();
 			auto layers = base::layers(api_version_minor());
 			auto extensions = base::extensions(api_version_minor());
-			info_.enabledLayerCount = uint32_t(layers.size());
-			info_.ppEnabledLayerNames = layers.data();
-			info_.enabledExtensionCount = uint32_t(extensions.size());
-			info_.ppEnabledExtensionNames = extensions.data();
-			info_.pApplicationInfo = &app_;
+			info.enabledLayerCount = uint32_t(layers.size());
+			info.ppEnabledLayerNames = layers.data();
+			info.enabledExtensionCount = uint32_t(extensions.size());
+			info.ppEnabledExtensionNames = extensions.data();
+			info.pApplicationInfo = &app;
 		}
 
 		void init() {
 			N::init();
 			if (!instance_) {
-				VK_ vkCreateInstance(&info_, N::allocator(), &instance_)
+				VK_ vkCreateInstance(&info, N::allocator(), &instance_)
 					| popup{ "[INSTANCE] create instance failure." };
 			}
 		}
@@ -156,10 +156,10 @@ VKTL_EXPORT_ namespace vktl::detail {
 		}
 
 		void api_version_minor(uint32_t minor) noexcept { 
-			app_.apiVersion = 
+			app.apiVersion =
 				::std::clamp(VK_MAKE_API_VERSION(0, 1, minor, 0), VK_API_VERSION_1_0, max_api_version());
 		}
-		uint32_t api_version_minor() noexcept { return VK_API_VERSION_MINOR(app_.apiVersion); }
+		uint32_t api_version_minor() noexcept { return VK_API_VERSION_MINOR(app.apiVersion); }
 
 		auto handle() const noexcept { return instance_; }
 
@@ -173,12 +173,13 @@ VKTL_EXPORT_ namespace vktl::detail {
 			vector<VK_ VkPhysicalDevice> devices(count);
 			VK_ vkEnumeratePhysicalDevices(instance_, &count, devices.data())
 				| popup{ "[INSTANCE] Enumerate physical devices failure." };
+			
 			return devices[index];
 		}
 
 	protected:
-		VK_ VkInstanceCreateInfo info_;
-		VK_ VkApplicationInfo app_;
+		VK_ VkInstanceCreateInfo info;
+		VK_ VkApplicationInfo app;
 
 		copyable_if_null<VK_ VkInstance> instance_{ VK_NULL_HANDLE };
 	};
@@ -190,20 +191,17 @@ VKTL_EXPORT_ namespace vktl::detail {
 	template<typename N>
 	struct m<debug_utils, N> : N {
 		constexpr m(debug_utils const& utils, auto&&...others)
-			: N{ forward_(others)... }
-			, debug_messanger{ .sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT, } {
+			: N{ forward_(others)... } {
 			N::append_extensions(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
 		}
 
 		void relocate() {
 			N::relocate();
-			N::info().pNext = &debug_messanger;
+			debug_messanger.pNext = ::std::exchange(N::info.pNext, &debug_messanger);
 		}
 
 	protected:
-		constexpr auto& info() { return debug_messanger; }
-
-		VK_ VkDebugUtilsMessengerCreateInfoEXT debug_messanger;
+		VK_ VkDebugUtilsMessengerCreateInfoEXT debug_messanger{ .sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT };
 	};
 
 	template<typename N>
@@ -213,4 +211,71 @@ VKTL_EXPORT_ namespace vktl::detail {
 			N::append_layers("VK_LAYER_KHRONOS_validation");
 		}
 	};
+
+	// other object might query from them, thus must use m<xxx>.
+
+#if defined(VK_VERSION_1_1)
+	template<typename N>
+	struct m<version1_1, N> : N {
+		constexpr m(version1_1, auto&&...others)
+			: N{ forward_(others)... } {
+			N::app.apiVersion = VK_API_VERSION_1_1;
+		}
+	};
+#else
+	template<typename N>
+	struct m<version1_1, N> : N {
+		static_assert(always_false<N>, "Update sdk to support version 1.1.");
+	};
+#endif
+#if defined(VK_VERSION_1_2)
+	template<> struct is_queryable<version1_2, version1_1> : ::std::true_type {};
+	template<typename N>
+	struct m<version1_2, N> : N {
+		constexpr m(version1_2, auto&&...others)
+			: N{ forward_(others)... } {
+			N::app.apiVersion = VK_API_VERSION_1_2;
+		}
+	};
+#else
+	template<typename N>
+	struct m<version1_2, N> : N {
+		static_assert(always_false<N>, "Update sdk to support version 1.2.");
+	};
+#endif
+#if defined(VK_VERSION_1_3)
+	template<> struct is_queryable<version1_3, version1_1> : ::std::true_type {};
+	template<> struct is_queryable<version1_3, version1_2> : ::std::true_type {};
+	template<typename N>
+	struct m<version1_3, N> : N {
+		constexpr m(version1_3, auto&&...others)
+			: N{ forward_(others)... } {
+			N::app.apiVersion = VK_API_VERSION_1_3;
+		}
+	};
+#else
+	template<typename N>
+	struct m<version1_3, N> : N {
+		static_assert(always_false<N>, "Update sdk to support version 1.3.");
+	};
+#endif
+
+#if defined(VK_VERSION_1_4)
+	template<> struct is_queryable<version1_4, version1_1> : ::std::true_type {};
+	template<> struct is_queryable<version1_4, version1_2> : ::std::true_type {};
+	template<> struct is_queryable<version1_4, version1_3> : ::std::true_type {};
+	template<typename N>
+	struct m<version1_4, N> : N {
+		constexpr m(version1_4, auto&&...others)
+			: N{ forward_(others)... } {
+			N::app.apiVersion = VK_API_VERSION_1_4;
+		}
+	};
+#else
+	template<typename N>
+	struct m<version1_4, N> : N {
+		static_assert(always_false<N>, "Update sdk to support version 1.4.");
+	};
+#endif
+
 }

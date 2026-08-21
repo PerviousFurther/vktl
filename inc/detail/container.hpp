@@ -205,6 +205,14 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 	template<typename...Ts>
 	struct iterators {
+		template<typename...Ts>
+		friend struct iterators;
+
+		static_assert(sizeof...(Ts) > 0, "Requires at least one type.");
+		static_assert(((!::std::is_reference_v<Ts>) && ...), "Not allow reference.");
+		static_assert(((::std::is_const_v<Ts>) && ...) || ((!::std::is_const_v<Ts>) && ...), "Must all const or non const.");
+		static_assert(((::std::is_volatile_v<Ts>) && ...) || ((!::std::is_volatile_v<Ts>) && ...), "Must all volatile or non const.");
+
 		static constexpr auto is_const = ((::std::is_const_v<Ts>) || ...);
 		using size_type = size_t;
 
@@ -219,9 +227,10 @@ VKTL_EXPORT_ namespace vktl::detail {
 			: pointers_(pointers) 
 		{}
 		template<typename...Os>
-			requires(((::std::convertible_to<Os(*)[], Ts(*)[]>) && ...))
+			requires(sizeof...(Os) == sizeof...(Ts)
+				&& ((::std::convertible_to<Os(*)[], Ts(*)[]>) && ...))
 		constexpr iterators(iterators<Os...> const& other)
-			: pointers_{ other.pointers }
+			: pointers_{ other.pointers_ }
 		{}
 		constexpr iterators(iterators const&) noexcept = default;
 		constexpr iterators& operator=(iterators const&) noexcept = default;
@@ -424,8 +433,8 @@ VKTL_EXPORT_ namespace vktl::detail {
 		using iterator = iterators<Ts...>;
 		using const_iterator = iterators<Ts...>;
 
-		VKTL_NODISCARD constexpr iterator begin() const noexcept { return { *this, 0 }; }
-		VKTL_NODISCARD constexpr iterator end() const noexcept { return { *this, size_ }; }
+		VKTL_NODISCARD constexpr iterator begin() const noexcept { return iterator{ pointers_ }; }
+		VKTL_NODISCARD constexpr iterator end() const noexcept { return begin() + static_cast<difference_type>(size_); }
 		VKTL_NODISCARD constexpr const_iterator cbegin() const noexcept { return begin(); }
 		VKTL_NODISCARD constexpr const_iterator cend() const noexcept { return end(); }
 
@@ -520,10 +529,10 @@ VKTL_EXPORT_ namespace vktl::detail {
 		VKTL_NODISCARD::std::tuple<Ts&...> back() { return view().back(); }
 		VKTL_NODISCARD::std::tuple<Ts const&...> back() const { return view().back(); }
 
-		VKTL_NODISCARD iterator begin() noexcept { return { view(), 0 }; }
-		VKTL_NODISCARD iterator end() noexcept { return { view(), size_ }; }
-		VKTL_NODISCARD const_iterator begin() const noexcept { return { view(), 0 }; }
-		VKTL_NODISCARD const_iterator end() const noexcept { return { view(), size_ }; }
+		VKTL_NODISCARD iterator begin() noexcept { return view().begin(); }
+		VKTL_NODISCARD iterator end() noexcept { return view().end(); }
+		VKTL_NODISCARD const_iterator begin() const noexcept { return view().begin(); }
+		VKTL_NODISCARD const_iterator end() const noexcept { return view().end(); }
 		VKTL_NODISCARD const_iterator cbegin() const noexcept { return begin(); }
 		VKTL_NODISCARD const_iterator cend() const noexcept { return end(); }
 
@@ -561,7 +570,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 			const auto pos = checked_index(where, true);
 			if (size_ == capacity_) { emplace_reallocating(pos, ::std::forward<Args>(args)...); }
 			else { emplace_in_place(pos, ::std::forward<Args>(args)...); }
-			return { view(), pos };
+			return begin() + static_cast<::std::ptrdiff_t>(pos);
 		}
 		iterator insert(const_iterator where, const Ts&... args)
 			requires((::std::copy_constructible<Ts> && ...)) { return emplace(where, args...); }
@@ -572,7 +581,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 			const auto pos = checked_index(where, false);
 			move_rows_left(pos + 1, pos, size_ - pos - 1);
 			destroy_row(--size_);
-			return { view(), pos };
+			return begin() + static_cast<::std::ptrdiff_t>(pos);
 		}
 
 	private:
@@ -715,8 +724,11 @@ VKTL_EXPORT_ namespace vktl::detail {
 			return size_ == capacity_ ? (capacity_ == 0 ? 1 : capacity_ * 2) : capacity_;
 		}
 		size_type checked_index(const_iterator where, bool allow_end) const noexcept {
-			assert(where.index() < size_ || (allow_end && where.index() == size_));
-			return where.index();
+			const auto offset = where - cbegin();
+			assert(offset >= 0);
+			const auto index = static_cast<size_type>(offset);
+			assert(index < size_ || (allow_end && index == size_));
+			return index;
 		}
 		void deallocate_buffer() noexcept { if (buffer_) { deallocate_raw(buffer_); buffer_ = nullptr; capacity_ = 0; } }
 
