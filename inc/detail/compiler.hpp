@@ -239,6 +239,9 @@ VKTL_EXPORT_ namespace vktl::detail {
 				}
 
 				func(shader);
+				shader.shader_handle_tag::compiled = byte_view{
+					shader.compiled.data(), shader.compiled.size()
+				};
 			}
 		}
 

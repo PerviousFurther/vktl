@@ -114,6 +114,12 @@ VKTL_EXPORT_ namespace vktl::detail {
 			info.usage |= usages;
 		}
 
+		void append(VK_ VkFormat format) noexcept {
+			assert(base::is_null());
+			assert(format != VK_ VK_FORMAT_UNDEFINED);
+			info.format = format;
+		}
+
 	protected:
 		VK_ VkImageCreateInfo info;
 
@@ -173,6 +179,12 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 		void upload_usage(VK_ VkImageUsageFlags usages) {
 			parent_of<image>(this)->append_usage(usages);
+		}
+
+		void append(VK_ VkFormat format) noexcept {
+			assert(base::is_null());
+			assert(format != VK_ VK_FORMAT_UNDEFINED);
+			info.format = format;
 		}
 
 	protected:

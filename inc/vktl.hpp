@@ -105,7 +105,7 @@
 # include <condition_variable>
 # include <deque>
 # include <list>
-
+// TODO: remove memroy dependency.
 # include <memory>
 
 # include <exception>
@@ -171,7 +171,7 @@ VKTL_EXPORT_ namespace vktl {
 #include "detail/bind_set.hpp"
 #include "detail/sampler.hpp"
 #include "detail/execution.hpp"
-#include "detail/task_recipe.hpp"
+#include "detail/recipe.hpp"
 #include "detail/task.hpp"
 
 #endif

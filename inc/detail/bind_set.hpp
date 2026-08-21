@@ -166,12 +166,13 @@ VKTL_EXPORT_ namespace vktl::detail {
 			return handle.value.sets[set];
 		}
 
-	protected:
-		static auto get_state() noexcept { return::std::tuple(bind::top{}); }
-
+	public:
 		void bind(default_resource_usage const&) {
 			assert(false && "bind_set does not allow this resource kind");
 		}
+
+	protected:
+		static auto get_state() noexcept { return::std::tuple(bind::top{}); }
 
 		void bind(uint32_t, auto&) {
 			assert(false && "bind_set does not allow this resource view kind");
@@ -247,7 +248,10 @@ VKTL_EXPORT_ namespace vktl::detail {
 				assert(point.usage.set == usage.set); // binded resource conflicted.
 				assert(point.usage.binding == usage.binding);  // binded resource conflicted.
 				point.usage.usages |= usage.usages;
+				point.usage.shader_stages |= usage.shader_stages;
 				point.usage.stages |= usage.stages;
+				point.usage.access |= usage.access;
+				point.usage.dependency |= usage.dependency;
 			}
 		}
 

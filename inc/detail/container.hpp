@@ -219,7 +219,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 			: pointers_(pointers) 
 		{}
 		template<typename...Os>
-			requires(::std::convertible_to<Os(*)[], Ts(*)[]>)
+			requires(((::std::convertible_to<Os(*)[], Ts(*)[]>) && ...))
 		constexpr iterators(iterators<Os...> const& other)
 			: pointers_{ other.pointers }
 		{}

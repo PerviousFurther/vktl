@@ -80,32 +80,41 @@ int main() {
 
 	object set0
 		= swc
-		| bind_set; // bind set is a glue between pass and resources.
+		| bind_set
+		| descriptor_set_extensions::allow_buffer
+		| descriptor_set_extensions::allow_image; // bind set is a glue between pass and resources.
 	                // bind set need to connect pass first to get resources usages.
 	                // and then bind view on it to take effort.
 	object pass_triangle
 		= dev 
-		| pass 
-		| pass_extensions::render_pass
-		| pipe
-		| pipe_extensions::subpass{ 0u }
-		| vertex_input
-		| vertex_input_extensions::vertex_binding{ /* TODO: more infomation. */ }
-		| vertex_input_extensions::vertex_binding{ /* TODO: more infomation. */ }
+		| pass | pass_extensions::render_pass
+		| pipe | pipe_extensions::subpass{ 0u }
 		| vertex_shader{ cpl.append("hello_world.vert", VK_NAMESPACE::VK_SHADER_STAGE_VERTEX_BIT) } // TODO: maybe make VK_SHADER_STAGE_VERTEX_BIT as independent flags. 
-		| uniform_buffer{ .index = 0u, .set = 0u, .binding = 0u }
+		| uniform_buffer{ .index = 0u }
+		| resource_usage_extensions::bind_on_set{ .set = 0u, .binding = 0u }
 		| fragment_shader{ cpl.append("hello_world.frag", VK_NAMESPACE::VK_SHADER_STAGE_FRAGMENT_BIT) }
-		| attachment{ .index = 0u,  }; // image index is independent.
+		| attachment{ .index = 0u, }
+		| pass_extensions::format_color{
+			.order = image_bits_order::bgra,
+			.rbits = 8u,
+			.gbits = 8u,
+			.bbits = 8u,
+			.abits = 8u,
+			.rtype = image_bits_type::unorm,
+			.gtype = image_bits_type::unorm,
+			.btype = image_bits_type::unorm,
+			.atype = image_bits_type::unorm,
+		}; // image index is independent.
 
 	// pass will not bind bind set.
 	// fill operation: fill set layout bindings and other jobs.
 	pass_triangle.fill(set0);
+	dlc.append(set0);
 
 	// BE NOTICED: set0 is same frame related with uniform view and 
 	object uniform_view 
 		= uniform
-		| buffer_view
-		| buffer_view_extensions::buffer_range{ .offset = 0u, .size = sizeof(float) * 16 };
+		| buffer_view;
 
 	set0.bind(0, uniform_view);
 	set0.bind(0, swc_image);
@@ -113,7 +122,9 @@ int main() {
 	object exec 
 		= dev
 		| execution{ .thread_count = 1u }
-		| queue{ .family_index = 0u, .index = 0u };
+		| queue{ .family = 0u, .index = 0u }
+		| queue_extensions::graphics
+		| queue_extensions::present;
 
 	object draw_triangle
 		= exec
@@ -121,16 +132,11 @@ int main() {
 		// this is task object's descriptor.
 		// since some state will changed, the function will be invoked by multiple time.
 		[&](auto state) {	
-			auto ctx = state.context(0u); // 0u means thread index inside exec.
-			// pass_state usually to related with pass instance.
-			// since our pass_triangle is render pass.
-			// then, it must implicitly create frame_buffer unless
-			auto pass_state = ctx.bind(pass_triangle); 
-			// TODO: maybe commnads.
-			// ctx.draw(vertex);
-			
-			// this is main task, thus it need to present.
-			ctx.present(swc);
+			auto worker = state.worker(0u);
+			auto commands = worker.commands(queue_duty::graphics);
+			// Drawing remains intentionally disabled in this acceptance example.
+			auto submission = state.submit(commands);
+			submission.present(swc);
 		} };
 
 	// refresh will trigger all binded object to initialize.
@@ -144,6 +150,7 @@ int main() {
 		// 	0.0f, 0.0f, 0.0f, 1.0f,
 		// });
 		
+		draw_triangle.submit();
 		exec.submit(); 
 	}
 }

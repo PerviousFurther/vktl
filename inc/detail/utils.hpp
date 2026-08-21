@@ -791,8 +791,6 @@ VKTL_EXPORT_ namespace vktl::detail {
 	struct trait_vkfn<R(*)(Args...)> {
 		static constexpr auto num_params = sizeof...(Args);
 		using params_list = ts<Args...>;
-		// using result_type = ::std::remove_pointer_t<tuple_at_t<num_params - 1u, params_list>>;
-		// using count_type = ::std::remove_pointer_t<tuple_at_t<num_params - 2u, params_list>>;
 		using return_type = R;
 		static constexpr auto nothrow = ::std::is_void_v<R>;
 	};
@@ -802,9 +800,9 @@ VKTL_EXPORT_ namespace vktl::detail {
 		static constexpr auto is_vkget_v = (tuple_size_v<typename trait_vkfn<Fn>::params_list>) > 2;
 
 		template<typename Fn>
-		using result_of_t = ::std::remove_pointer_t<tuple_at_t<num_params - 1u, typename trait_vkfn<Fn>::params_list>>;
+		using result_of_t = ::std::remove_pointer_t<tuple_at_t<trait_vkfn<Fn>::num_params - 1u, typename trait_vkfn<Fn>::params_list>>;
 		template<typename Fn>
-		using count_of_t = ::std::remove_pointer_t<tuple_at_t<num_params - 2u, typename trait_vkfn<Fn>::params_list>>;
+		using count_of_t = ::std::remove_pointer_t<tuple_at_t<trait_vkfn<Fn>::num_params - 2u, typename trait_vkfn<Fn>::params_list>>;
 
 		template<typename VFn, typename Fn, typename...Ts>
 		VK_ VkResult operator()(VFn&& fn, Fn call, Ts...val) const noexcept {
@@ -833,44 +831,13 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 
 		template<::std::ranges::contiguous_range Vec, typename Fn, typename...Ts>
-		VK_ VkResult operator()(Vec& vec, Fn call, Ts...val) const noexcept {
+		VK_ VkResult operator()(Vec& vec, Fn call, Ts...vals) const noexcept {
 			return operator()([&](auto count) { vec.resize(count); return vec; }, call, ::std::move(vals)...);
 		}
 		template<::std::ranges::contiguous_range Vec, typename Fn, typename...Ts>
-		VK_ VkResult operator()(Vec& vec, ::std::ranges::range_value_t<Vec> def, Fn call, Ts...val) const noexcept {
+		VK_ VkResult operator()(Vec& vec, ::std::ranges::range_value_t<Vec> def, Fn call, Ts...vals) const noexcept {
 			return operator()([&](auto count) { vec.resize(count, def); return vec; }, call, ::std::move(vals)...);
 		}
-
-		// static constexpr auto some_shit(auto& first) {}
-		// static constexpr auto some_shit(auto& first, auto& second, auto&...rest) {
-		// 	auto itf = first.begin();
-		// 	auto its = second.begin();
-		// 	for (;itf != first.end(); itf++, its++) {
-		// 		itf->pNext = &*its;
-		// 	}
-		// 	some_shit(second, rest);
-		// }
-
-		// template<::std::ranges::contiguous_range...Vecs, typename Fn, typename...Ts>
-		// VK_ VkResult operator()(::std::tuple<Vecs&...> vecs, Fn call, Ts...vals) const noexcept {
-		// 	return operator()([&](auto count) -> tuple_at_t<0u, ts<Vecs&...>> {
-		// 		::std::apply([&](auto&...others) { ((others.resize(count)), ...); some_shit(others...); }, vecs);
-		// 		return::std::get<0u>(vecs);
-		// 	}, call, ::std::move(vals)...);
-		// }
 	} vkget{};
-
-	// template<typename T, ::std::ranges::range_value_t<T> default_val>
-	// struct vkvec : vector<T> {
-	// 	constexpr void resize(size_t count) {
-	// 		this->resize(count, default_val);
-	// 	}
-	// };
-
-	// template<auto dispatch>
-	// struct vkdispatch {
-	// 
-	// };
-
 
 }

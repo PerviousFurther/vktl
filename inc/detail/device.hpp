@@ -1,11 +1,6 @@
 #pragma once
 
 // --- Agents specification -------------------------------------------------
-// Descriptor-set layouts are normalized value objects cached permanently by
-// the device. A pass and a bind set keep independent schema values/handles;
-// neither stores references into the other. Pipeline set numbers map through
-// `default_bind_set_schema::set_layout_indices`, whose holes remain `invalid`.
-// Pipeline-layout creation materializes an empty layout for every such hole.
 // --------------------------------------------------------------------------
 
 VKTL_EXPORT_ namespace vktl::vptr {
@@ -120,15 +115,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 		}
 	};
 
-	//struct default_bind_set_schema {
-	//	vector<default_descriptor_set_layout> layout_infos;
-	//	vector<uint16_t> set_layout_indices;
-	//
-	//	constexpr bool operator==(default_bind_set_schema const& other) const noexcept {
-	//		return layout_infos == other.layout_infos
-	//			&& set_layout_indices == other.set_layout_indices;
-	//	}
-	//};
+
 
 	struct default_pipeline_layout {
 		VK_ VkPipelineLayoutCreateFlags flags = 0u;

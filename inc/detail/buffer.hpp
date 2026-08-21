@@ -186,6 +186,12 @@ VKTL_EXPORT_ namespace vktl::detail {
 			parent_of<buffer>(this)->append_usage(usages);
 		}
 
+		void append(VK_ VkFormat format) noexcept {
+			assert(!handle_);
+			assert(format != VK_ VK_FORMAT_UNDEFINED);
+			info.format = format;
+		}
+
 	protected:
 		VK_ VkBufferViewCreateInfo info;
 

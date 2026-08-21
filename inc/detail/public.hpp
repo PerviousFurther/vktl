@@ -824,9 +824,28 @@ VKTL_EXPORT_ namespace vktl {
 		uint32_t index;
 	};
 
+	namespace attachment_attribute {
+		using type = uint16_t;
+
+		inline constexpr type color = type(1u) << 0u;
+		inline constexpr type depth = type(1u) << 1u;
+		inline constexpr type stencil = type(1u) << 2u;
+		inline constexpr type resolve = type(1u) << 3u;
+		inline constexpr type input = type(1u) << 4u;
+
+		inline constexpr type load = type(1u) << 5u;
+		inline constexpr type clear = type(1u) << 6u;
+		inline constexpr type clear_stencil = type(1u) << 7u;
+		inline constexpr type store = type(1u) << 8u;
+		inline constexpr type store_stencil = type(1u) << 9u;
+	}
+
 	struct attachment {
-		uint16_t index;
-		uint16_t attribute = 0x41u;
+		uint16_t index = invalid;
+		attachment_attribute::type attribute =
+			attachment_attribute::color
+			| attachment_attribute::clear
+			| attachment_attribute::store;
 	};
 	
 	namespace descriptor_set_extensions {
@@ -968,6 +987,8 @@ VKTL_EXPORT_ namespace vktl {
 	namespace pass_extensions {
 		using extensions::allocate_from;
 		using extensions::debug_named;
+		using image_format::format_color;
+		using image_format::format_depth;
 		inline constexpr struct compute_ {} compute {};
 		inline constexpr struct rendering_ {} rendering {};
 		inline constexpr struct render_pass_ {} render_pass {};

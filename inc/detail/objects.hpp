@@ -6,11 +6,7 @@
 // descriptors are transparent layers so data-only declarations compose safely.
 
 VKTL_EXPORT_ namespace vktl::detail {
-
-	struct error {
-		int code;
-		const char* msg;
-	};
+	using error = vktl::error;
 
 	struct popup {
 		template<typename T>
@@ -272,7 +268,6 @@ VKTL_EXPORT_ namespace vktl::detail {
 	template<typename T>
 	concept extensions_tag = ::std::is_aggregate_v<T>;
 
-
 	template<typename T>
 	struct object : T::type {
 		using object_tag = void;
@@ -345,10 +340,6 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 	template<typename...Args>
 	object(s_<Args...>&&) -> object<ob_<::std::remove_cvref_t<Args>...>>;
-
-	// template<typename T>
-	// struct make
-
 
 	template<typename...Cs>
 	struct ob_<b<Cs...>> {
