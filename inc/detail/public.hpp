@@ -26,10 +26,10 @@ VKTL_EXPORT_ namespace vktl {
 VKTL_EXPORT_ namespace vktl::detail {
 	inline constexpr struct invalid_ {
 		template<::std::unsigned_integral T>
-		static constexpr auto value = ~T(0u);
+		static constexpr T value = ~T(0);
 
 		template<::std::unsigned_integral T>
-		constexpr operator T() const noexcept { return ~T(0u); }
+		constexpr operator T() const noexcept { return value<T>; }
 
 		// c++ dont allow convert to T and then use bultin operator==.
 		// thus manually use it.

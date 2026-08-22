@@ -11,7 +11,7 @@
 
 VKTL_EXPORT_ namespace vktl::detail {
 
-	inline constexpr uint64_t recipe_hash_basis = FNV_offset;
+	inline constexpr uint64_t recipe_hash_basis = FNV_bias;
 	inline constexpr uint64_t recipe_hash_prime = 1099511628211ull;
 
 	inline constexpr uint64_t recipe_hash_bytes(

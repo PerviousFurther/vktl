@@ -1,14 +1,24 @@
 #pragma once
 
 // --- Agents specification -------------------------------------------------
-// `frame_index_source` and `basic_frame_indexed*` provide allocation
+// `frame_index_source/frame_scope` and `basic_frame_indexed*` provide allocation
 // multiplicity only. `frame_related` is the separate command-invalidation
 // capability and carries a relocation-stable scope ID plus per-frame revision.
 // Independent frame hosts must never share an ID because their counts match.
+// 
+// ## Frame Capabilities
+// - Use `vptr::frame_index_source` and `basic_frame_indexed*` only for allocation multiplicity and current-frame selection. 
+//   They expose `frame_count()` and `frame_index()` and do not imply command invalidation.
+// - Reserve `vptr::frame_related` for command dependencies. 
+//   It exposes a relocation-stable scope identity, frame count/index, and a per-frame revision. 
+//   Objects below the same frame host share its identity; independent hosts never merge merely because counts or indices match.
+// - Increment every affected frame revision when a swapchain is recreated. 
+//   When a change can be isolated to one frame, increment only that frame.
 // --------------------------------------------------------------------------
 
 VKTL_EXPORT_ namespace vktl::detail {
 	using vktl::frame_scope_id;
+
 	struct frame_scope; // tag for frame related objects.
 
 	inline frame_scope_id allocate_frame_scope_id() noexcept {

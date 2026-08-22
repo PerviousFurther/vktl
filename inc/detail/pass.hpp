@@ -64,7 +64,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 		uint32_t set = invalid;
 		uint32_t binding = invalid;
 		uint64_t offset = maximum;
-		uint64_t usages = 0u;
+		uint64_t usages = 0u; // since 
 		uint64_t attributes = 0u;
 
 		constexpr bool uses_descriptor() const noexcept {

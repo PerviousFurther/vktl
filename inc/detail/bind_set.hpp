@@ -118,11 +118,12 @@ VKTL_EXPORT_ namespace vktl::detail {
 	};
 
 	template<typename Trait>
-	struct default_set_bind_point {
-		default_resource_usage usage{};
+	struct default_set_bind_point : default_resource_usage {
 		box<vptr::view_need_descriptor<Trait>> view;
 
-		constexpr bool declared() const noexcept { return usage.index != invalid; }
+		constexpr bool declared() const noexcept { 
+			return this->index != invalid;
+		}
 	};
 
 	template<typename N>
@@ -241,20 +242,18 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 			auto& point = points_[usage.index];
 			if (!point.declared()) {
-				point.usage = usage;
-			}
-			else if (point.usage.resource_type != usage.resource_type) {
-				N::bind(usage);
+				static_cast<default_resource_usage&>(point) = usage;
 			}
 			else {
-				assert(point.usage.type == usage.type); // binded resource conflicted.
-				assert(point.usage.set == usage.set); // binded resource conflicted.
-				assert(point.usage.binding == usage.binding);  // binded resource conflicted.
-				point.usage.usages |= usage.usages;
-				point.usage.shader_stages |= usage.shader_stages;
-				point.usage.stages |= usage.stages;
-				point.usage.access |= usage.access;
-				point.usage.dependency |= usage.dependency;
+				assert(point.type == usage.type); // binded resource conflicted.
+				assert(point.set == usage.set); // binded resource conflicted.
+				assert(point.binding == usage.binding);  // binded resource conflicted.
+
+				point.usages |= usage.usages;
+				point.shader_stages |= usage.shader_stages;
+				point.stages |= usage.stages;
+				point.access |= usage.access;
+				point.dependency |= usage.dependency;
 			}
 		}
 
@@ -262,7 +261,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 			assert(index < points_.size());
 			auto& point = points_[index];
 			assert(point.declared()); // the bind point is not initialized.
-			view.upload_usage(typename resource_trait::usage_flags_type(point.usage.usages));
+			view.upload_usage(typename resource_trait::usage_flags_type(point.usages));
 			point.view = view;
 		}
 
@@ -291,7 +290,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 		void fill_descriptor_writes(auto& state, bind_descriptors const& descriptors) {
 			auto write_count = size_t{};
 			for (auto const& point : points_) {
-				if (point.declared() && point.usage.uses_descriptor() && !point.view.empty()) {
+				if (point.declared() && point.uses_descriptor() && !point.view.empty()) {
 					write_count += descriptors.frame_count;
 				}
 			}
@@ -309,9 +308,9 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 			auto& pool = *static_cast<descriptor_pool*>(descriptors.handle);
 			for (auto const& point : points_) {
-				if (!point.declared() || !point.usage.uses_descriptor() || point.view.empty()) continue;
-				assert(point.usage.set < descriptors.set_offsets.size());
-				auto compact_set = descriptors.set_offsets[point.usage.set];
+				if (!point.declared() || !point.uses_descriptor() || point.view.empty()) continue;
+				assert(point.set < descriptors.set_offsets.size());
+				auto compact_set = descriptors.set_offsets[point.set];
 				assert(compact_set != invalid);
 				assert(point.view.frame_count() == 1u
 					|| point.view.frame_count() == descriptors.frame_count);
@@ -322,13 +321,13 @@ VKTL_EXPORT_ namespace vktl::detail {
 						.sType = VK_ VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
 						.dstSet = pool.sets[descriptors.first
 							+ frame * descriptors.set_count + compact_set],
-						.dstBinding = point.usage.binding,
+						.dstBinding = point.binding,
 						.descriptorCount = 1u,
-						.descriptorType = point.usage.type,
+						.descriptorType = point.type,
 					};
 
 					if constexpr (::std::same_as<ViewTrait, trait<buffer_view_>>) {
-						if (uses_texel_view(point.usage.type)) {
+						if (uses_texel_view(point.type)) {
 							resource_state.texel_views.emplace_back(
 								point.view.descriptor_view(view_frame));
 							write.pTexelBufferView = &resource_state.texel_views.back();

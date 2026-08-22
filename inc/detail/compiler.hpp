@@ -1,15 +1,9 @@
 #pragma once
 
-// Interface style: compiler objects collect source or SPIR-V shaders and add
-// language/optimization behavior through composable extension tags.
-// Implementation: heterogeneous shader records live in a polymorphic list;
-// compilation and reflection are deferred until initialization.
+
 
 #if !defined(VKTL_NO_COMPILER)
 
-//#if !defined(VKTL_NO_PRA_LIB)
-//// # pragma comment(lib, "glslc")
-//#endif
 
 namespace VK_NAMESPACE {
 #define SPIRV_REFLECT_DISABLE_CPP_BINDINGS

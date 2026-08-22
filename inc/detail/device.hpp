@@ -216,6 +216,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 		auto physical_device() const noexcept { return phydv_; }
 
 		VK_ VkDescriptorSetLayout create(default_descriptor_set_layout value) {
+			auto _ = locker_of(this);
 			for (auto set_layout : set_layouts_) {
 				if (get<1>(set_layout) == value) {
 					return get<0>(set_layout);
@@ -289,11 +290,13 @@ VKTL_EXPORT_ namespace vktl::detail {
 			VK_ vkCreateDescriptorSetLayout(handle_, &create_info, N::allocator(), &layout)
 				| popup{ "[DESCRIPTOR SET LAYOUT] Create descriptor set layout failure." };
 
-			auto _ = locker_of(this);
+			
 			set_layouts_.emplace_back(layout, ::std::move(value));
 			return layout;
 		}
+
 		VK_ VkPipelineLayout create(default_pipeline_layout value) {
+			auto _ = locker_of(this);
 			for (auto pipe_layout : pipe_layouts_) {
 				if (get<1>(pipe_layout) == value) {
 					return get<0>(pipe_layout);
@@ -313,7 +316,6 @@ VKTL_EXPORT_ namespace vktl::detail {
 			VK_ vkCreatePipelineLayout(handle_, &create_info, N::allocator(), &result)
 				| popup{ "[PIPELINE LAYOUT] Create pipeline layout failure." };
 
-			auto _ = locker_of(this);
 			pipe_layouts_.emplace_back(result, ::std::move(value));
 			return result;
 		}
@@ -355,7 +357,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 	};
 
 
-	template<have_parent_of<instance> N>
+	template<typename N>
 		requires(!have_parent_of<instance, version1_1>)
 	struct m<device, N> : basic_device<N> {
 		using base = basic_device<N>;

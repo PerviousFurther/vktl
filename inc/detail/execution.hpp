@@ -7,11 +7,45 @@
 // pools. There is no global epoch, task registry, or frames-in-flight ring.
 // Queue calls are made through invoke(); poll() is a non-blocking maintenance
 // hook. All presentation code is guarded by VKTL_HAVE_WINDOW.
+// 
+// ## Execution and Task Plans
+// -`execution::thread_count` selects CPU command - recording workers; 
+//   workers do not own Vulkan queues.
+//   Command pools are keyed by worker, queue family, and frame / retirement slot, while queue 
+//   operations are issued centrally by `execution::submit()` under a per - queue lock.
+// - A task plan contains independently recorded command units.
+//   Expand frame variants per command unit from its unique frame scopes; 
+//   never form a task - wide Cartesian product or synthesize a primary command buffer merely to join independent units.
+// - `task.refresh()` is transactional.Build and record into staging storage, validate captured revisions before recording and publication, 
+//   and exchange a stable plan handle only after every required job succeeds.
+//   Retire replaced GPU - visible storage by completion serial.
+// - Derive command validity from recipe revisions, 
+//   stable frame - scope identities, selected per - frame revisions, 
+//   and non - frame dependency revisions.Do not retain an authoritative dirty - state enum.
+// - `task.submit()` selects recorded frame variants, 
+//   fills task - owned preallocated pools, and invokes its compiled queue operations through execution's queue service. 
+//   `execution.submit(task)` is only a convenience entry point. 
+//   Neither submit path may allocate memory or repeat queue capability validation.
+// - Submission and completion are task - local; 
+//   execution must not maintain a global epoch, a task registry, or a frames - in - flight fence ring.
+//   Cross - queue ordering is expressed with Vulkan synchronization, not task call order.
+// - Queue payloads are extensible through specialized traits plus handwritten `vktl::vptr` tables.
+//   Keep one typed contiguous pool per payload trait and preserve heterogeneous execution order with a preallocated flat operation sequence; 
+//   do not add a central payload `variant` or type switch.
+// - Give every built - in payload trait a stable compile - time numeric ID; 
+//   do not use static object addresses as runtime type keys. 
+//   Aggregate storage counts by sum, but aggregate each payload instance's nested-array capacity by maximum 
+//   so every pooled entry is large enough without multiplying total capacity across all entries.
+// - Keep preallocated payload columns and their active counts in compiled storage, 
+//   but assemble pointer - bearing Vulkan submit / present info structs on the stack at invocation time. 
+//   Do not persist create - info - style views whose pointers can be invalidated when pooled columns move or resize.
+// - Store non - movable execution queues, workers, and task slots in stable - address containers rather than `vector<unique_ptr<... >> `. 
+//   Execution is single - controller state; its per - queue submission locks and task bookkeeping lock remain focused synchronization boundaries.
 // --------------------------------------------------------------------------
 
 VKTL_EXPORT_ namespace vktl::detail {
 
-	inline constexpr auto FNV_offset = 1469598103934665603ull;
+	inline constexpr auto FNV_bias = 1469598103934665603ull;
 
 	struct queue_declaration : queue {
 		queue_duty::type duty = queue_duty::none;
@@ -50,7 +84,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 	struct command_pool_create_policy {
 		VK_ VkCommandPoolCreateFlags flags = VK_ VkCommandPoolCreateFlags(0u);
-		uint64_t fingerprint = FNV_offset;
+		uint64_t fingerprint = invalid;
 
 		constexpr command_pool_create_policy() noexcept = default;
 		constexpr command_pool_create_policy(auto&&...) noexcept {}
