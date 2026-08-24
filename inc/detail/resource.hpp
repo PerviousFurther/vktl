@@ -57,7 +57,7 @@ VKTL_EXPORT_ namespace vktl::vptr {
 		using base = apply_compose<C,
 			bindable<detail::bind_memory>,
 			handle_owner<detail::locked<handle_type>>,
-			frame_index_source>;
+			frame_indexed>;
 
 		template<typename C>
 		struct apply : base<C> {
@@ -1184,8 +1184,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 	};
 
 	template<typename N>
-		requires(object_of<N,  memory_allocator_>)
-	struct m<allow_buffer_, N> : basic_allow_resource<N, trait<buffer>> {
+	struct m<memory_allocator_extensions::allow_buffer_, N> : basic_allow_resource<N, trait<buffer>> {
 		using base = basic_allow_resource<N, trait<buffer>>;
 		m(allow_buffer_, auto&&...others)
 			: base{ forward_(others)... }
@@ -1194,8 +1193,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 	};
 
 	template<typename N>
-		requires(object_of<N, memory_allocator_>)
-	struct m<allow_image_, N> : basic_allow_resource<N, trait<image>> {
+	struct m<memory_allocator_extensions::allow_image_, N> : basic_allow_resource<N, trait<image>> {
 		using base = basic_allow_resource<N, trait<image>>;
 		m(allow_image_, auto&&...others)
 			: base{ forward_(others)... }

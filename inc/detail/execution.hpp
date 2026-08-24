@@ -223,6 +223,8 @@ VKTL_EXPORT_ namespace vktl::detail {
 			self.queues_.emplace_back(queue_declaration{ declaration });
 		}
 
+		auto thread_id() const noexcept { return this->thread_id_; }
+
 		void submit() {
 			if (errors_.size()) {
 				auto error = errors_.front();
@@ -254,7 +256,6 @@ VKTL_EXPORT_ namespace vktl::detail {
 					}
 				}
 				for (Q& queue : queues_) {
-					// assert(queue.get_lock().try_lock());
 					VK_ vkQueueWaitIdle(queue.handle);
 				}
 				delete[] locks_;

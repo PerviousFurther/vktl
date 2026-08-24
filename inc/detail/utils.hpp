@@ -4,6 +4,8 @@
 // helpers provide reusable building blocks for the composable object layers.
 // Implementation: ownership behavior is encoded in wrapper copy/move rules;
 // overloaded handle address operators are reserved for Vulkan out parameters.
+// Agents specification: move_only transfers its value and clears the source;
+// assigning a live destination is rejected to avoid silently leaking a handle.
 
 VKTL_EXPORT_ namespace vktl::detail {
 
@@ -344,7 +346,35 @@ VKTL_EXPORT_ namespace vktl::detail {
 		constexpr copyable_if_null& operator=(copyable_if_null&& other) noexcept = default;
 	};
 
+	template<typename T>
+	struct move_only : handle_<T> {
+		using base = handle_<T>;
 
+		constexpr move_only() = default;
+		template<typename...Args>
+			requires(!(sizeof...(Args) == 1u && (similiar_to<Args, move_only> && ...)))
+		constexpr move_only(Args&&...args)
+			: base{ static_cast<Args&&>(args)... }
+		{
+		}
+
+		move_only(move_only const&) = delete;
+		move_only& operator=(move_only const&) = delete;
+
+		constexpr move_only(move_only&& other) noexcept
+			: base{ ::std::exchange(other.value, {}) }
+		{
+		}
+
+		constexpr move_only& operator=(move_only&& other) noexcept {
+			if (::std::addressof(other) != this) {
+				assert(!this->value); // Overwriting a live handle would leak it.
+				this->value = ::std::exchange(other.value, {});
+			}
+			return *this;
+		}
+
+	};
 
 	template<typename T>
 	struct range {

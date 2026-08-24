@@ -119,7 +119,6 @@
 
 #define VK_ VK_NAMESPACE::
 
-
 namespace VK_NAMESPACE {
 #include <vulkan/vulkan.h>
 }
@@ -130,10 +129,8 @@ namespace VK_NAMESPACE {
 # define VKTL_HAVE_WINDOW 1
 #endif
 
-
 #define forward_(x) ::std::forward<decltype(x)>(x)
 
-//#include "detail/trait.hpp"
 #include "detail/utils.hpp"
 #include "detail/container.hpp"
 #include "detail/objects.hpp"
@@ -167,7 +164,7 @@ VKTL_EXPORT_ namespace vktl {
 #include "detail/bind_set.hpp"
 #include "detail/sampler.hpp"
 #include "detail/execution.hpp"
-#include "detail/recipe.hpp"
+#include "detail/commands.hpp"
 #include "detail/task.hpp"
 
 #endif

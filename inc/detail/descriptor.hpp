@@ -50,15 +50,17 @@ VKTL_EXPORT_ namespace vktl::detail {
 VKTL_EXPORT_ namespace vktl::vptr {
 	struct descriptor_set {
 		using layout_t = detail::default_bind_set_schema;
+		using layout_handle = VK_ VkDescriptorSetLayout;
 		// using flags_t = VK_ VkDescriptorBindingFlags;
 		using bind_t = detail::bind_descriptors;
 
 		template<typename C>
-		using base = apply_compose<C, bindable<bind_t>, frame_index_source>;
+		using base = apply_compose<C, bindable<bind_t>, frame_indexed>;
 
 		template<typename C>
 		struct apply;
 
+		vfn<layout_handle() const noexcept> layout_;
 		vfn<layout_t const& () const> info_;
 	};
 
@@ -72,11 +74,17 @@ VKTL_EXPORT_ namespace vktl::vptr {
 				.info_ = [](void const* ptr) noexcept -> layout_t const& {
 					return static_cast<T const*>(ptr)->info();
 				},
+				.layout_ = [](void const* ptr) noexcept -> layout_handle {
+					return static_cast<T const*>(ptr)->layout();
+				}
 			};
 		}
 
 		layout_t const& info() const noexcept {
 			return vptr.info_(C::get_this());
+		}
+		layout_handle() layout() const noexcept {
+			return vptr.layout_(C::get_this());
 		}
 
 		descriptor_set vptr;
@@ -127,12 +135,9 @@ VKTL_EXPORT_ namespace vktl::detail {
 		}
 
 		VK_ VkDescriptorPoolCreateFlags flags;
-		
 		VK_ VkDescriptorPool pool;
 		vector<VK_ VkDescriptorPoolSize> pool_sizes;
-		vector<VK_ VkDescriptorSet> sets;
-		vector<vector<VK_ VkDescriptorPoolSize>> set_occupied;
-		uint32_t allocations = 0u;
+		vectors<VK_ VkDescriptorSet, vector<VK_ VkDescriptorPoolSize>> sets;
 	};
 
 	// N ususally m<descriptor_allocator_, <other>>
@@ -142,57 +147,84 @@ VKTL_EXPORT_ namespace vktl::detail {
 			: N{forward_(others)...} 
 		{}
 		
+		// AGENT SPECIFICATION:
+		// DO NOT MODIFY THESE FUNCTION, ALTHOUGH IT IS UGLY.
+		// ALLOW MODIFY WHEN YOU HAVE BETTER IMPLMENTATION METHOD AND ASKED USER FOR REQUEST.
 		void init(VK_ VkDescriptorPoolCreateFlags pool_flags = 0u) {
 			N::init();
 			auto dv = parent_of<device>(this);
 			auto hdv = dv->handle();
 			const bool allow_free = pool_flags & VK_ VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
-			auto _ = locker_of(this);
+			auto num_childs = uint32_t(childs_.size());
 
-			struct child_allocation {
-				uint32_t first;
-				uint32_t frame_count;
-				uint32_t set_count;
-				vector<uint16_t> set_offsets;
-			};
-
+#if defined(VK_VALVE_mutable_descriptor_type)
+			vector<VK_ VkDescriptorType> type_list;
+#endif // defined(VK_VALVE_mutable_descriptor_type)
+#if defined(VK_EXT_descriptor_indexing)
+			vector<uint32_t> variable_descriptor_counts(num_childs);
+			variable_descriptor_counts.reserve(num_childs);
+			bool have_varaible_descriptor_count = false;
+#endif
+#if defined(VK_EXT_inline_uniform_block)
+			uint32_t max_inline_uniform_block = 0u;
+#endif
 			vector<VK_ VkDescriptorPoolSize> pools;
+			vector<vector<VK_ VkDescriptorPoolSize>> child_occupied; // child usually corresponed with set.
+			child_occupied.reserve(num_childs);
+
 			vector<VK_ VkDescriptorSetLayout> set_layouts;
-			vector<vector<VK_ VkDescriptorPoolSize>> occupied;
-			vector<child_allocation> allocations;
-			allocations.reserve(childs_.size());
-
+			set_layouts.reserve(num_childs);
 			for (auto& child : childs_) {
-				auto const& schema = child.info();
-				child_allocation allocation{
-					.first = uint32_t(set_layouts.size()),
-					.frame_count = child.frame_count(),
-					.set_count = 0u,
-					.set_offsets = vector<uint16_t>(schema.set_layout_indices.size(), uint16_t(invalid)),
-				};
+				uint32_t frame_count = child.frame_count();
+				default_descriptor_set_layout layout_info = child.info();
+				for (auto const& info : layout_info.layouts) {
+					VK_ VkDescriptorSetLayoutBinding binding = get<0u>(info);
+#if defined(VK_EXT_inline_uniform_block)
+					if (binding.descriptorType == VK_ VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK_EXT) {
+						max_inline_uniform_block += frame_count;
+					}
+#endif
 
-				vector<VK_ VkDescriptorSetLayout> compact_layouts;
-				for (auto set = 0u; set < schema.set_layout_indices.size(); ++set) {
-					auto layout_index = schema.set_layout_indices[set];
-					if (layout_index == invalid) continue;
-					allocation.set_offsets[set] = uint16_t(compact_layouts.size());
-					auto const& layout_info = schema.layout_infos[layout_index];
-					compact_layouts.emplace_back(dv->create(layout_info));
-					for (auto const& row : layout_info.layouts) {
-						auto binding = get<0u>(row);
-						auto total = binding;
-						total.descriptorCount *= allocation.frame_count;
-						insert_pool_size(pools, total);
+					if (allow_free) {
+						for (auto i = 0u; i < frame_count; i++) {
+							insert_pool_size(child_occupied.emplace_back(), binding);
+						}
 					}
-				}
-				allocation.set_count = uint32_t(compact_layouts.size());
-				for (auto frame = 0u; frame < allocation.frame_count; ++frame) {
-					for (auto set_layout : compact_layouts) {
-						set_layouts.emplace_back(set_layout);
-						occupied.emplace_back();
+
+#if defined(VK_VALVE_mutable_descriptor_type)
+					if (binding.descriptorType == VK_ VK_DESCRIPTOR_TYPE_MUTABLE_VALVE) {
+						vector<VK_ VkDescriptorType> const& types = get<3u>(info);
+						::std::ranges::copy_if(types,
+							::std::back_inserter(type_list),
+							[&](auto type) {
+								return::std::ranges::find(type_list, type) == type_list.end();
+							});
 					}
+#endif
+
+#if defined(VK_EXT_descriptor_indexing)
+					VK_ VkDescriptorBindingFlagsEXT flags = get<2u>(info);
+					for (auto i = 0u; i < frame_count; i++) {
+						auto& vdc = variable_descriptor_counts.emplace_back();
+						if ((flags & VK_ VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT_EXT) != 0u) {
+							pool_flags |= VK_ VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT_EXT;
+						}
+						if ((flags & VK_ VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT_EXT) != 0u) {
+							// usually only last one have this, thus directly increase is ok.
+							vdc = binding.descriptorCount;
+							have_varaible_descriptor_count = true;
+						}
+					}
+#endif
+
+					binding.descriptorCount *= frame_count;
+					insert_pool_size(pools, binding);
 				}
-				allocations.emplace_back(::std::move(allocation));
+
+				auto layout = dv->create(::std::move(layout_info));
+				for (auto i = 0u; i < frame_count; i++) {
+					set_layouts.emplace_back(layout);
+				}
 			}
 
 			if (!set_layouts.size()) { return; }
@@ -205,9 +237,38 @@ VKTL_EXPORT_ namespace vktl::detail {
 				.pPoolSizes = pools.data()
 			};
 
+#if defined(VK_EXT_inline_uniform_block)
+			VK_ VkDescriptorPoolInlineUniformBlockCreateInfoEXT inline_pool_info{
+				.sType = VK_ VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_INLINE_UNIFORM_BLOCK_CREATE_INFO_EXT,
+				.pNext = pool_info.pNext,
+				.maxInlineUniformBlockBindings = max_inline_uniform_block
+			};
+			if (max_inline_uniform_block > 0u) {
+				pool_info.pNext = &inline_pool_info;
+			}
+#endif
+#if defined(VK_EXT_mutable_descriptor_type)
+			auto it = ::std::ranges::find_if(pools,
+				[](VK_ VkDescriptorPoolSize const& p) { return p.type == VK_ VK_DESCRIPTOR_TYPE_MUTABLE_VALVE; });
+			if (it != pools.end()) {
+				::std::iter_swap(pools.begin(), it);
+				VK_ VkMutableDescriptorTypeListVALVE type_list_info{
+					.descriptorTypeCount = uint32_t(type_list.size()),
+					.pDescriptorTypes = type_list.data(),
+				};
+				VK_ VkMutableDescriptorTypeCreateInfoVALVE mutable_info{
+					.sType = VK_ VK_STRUCTURE_TYPE_MUTABLE_DESCRIPTOR_TYPE_CREATE_INFO_VALVE,
+					.pNext = pool_info.pNext,
+					.mutableDescriptorTypeListCount = 1u,
+					.pMutableDescriptorTypeLists = &type_list_info,
+				};
+				if (type_list.size()) {
+					mutable_info.pNext = ::std::exchange(pool_info.pNext, &mutable_info);
+				}
+			}
+#endif // defined(VK_EXT_mutable_descriptor_type)
 			descriptor_pool& pool = pools_.emplace_back<descriptor_pool>(this);
 			pool.flags = pool_flags;
-			pool.set_occupied = ::std::move(occupied);
 			VK_ vkCreateDescriptorPool(hdv, &pool_info, N::allocator(), &pool.pool)
 				| popup{ "[DESCRIPTOR POOL] Create descriptor pool failure." };
 
@@ -217,22 +278,32 @@ VKTL_EXPORT_ namespace vktl::detail {
 				.descriptorSetCount = uint32_t(set_layouts.size()),
 				.pSetLayouts = set_layouts.data()
 			};
+#if defined(VK_EXT_descriptor_indexing)
+			VK_ VkDescriptorSetVariableDescriptorCountAllocateInfoEXT variable_alloc_info{
+				.sType = VK_ VK_STRUCTURE_TYPE_DESCRIPTOR_SET_VARIABLE_DESCRIPTOR_COUNT_ALLOCATE_INFO_EXT,
+				.descriptorSetCount = uint32_t(variable_descriptor_counts.size()),
+				.pDescriptorCounts = variable_descriptor_counts.data()
+			};
+			if (have_varaible_descriptor_count) {
+				variable_alloc_info.pNext = ::std::exchange(alloc_info.pNext, &variable_alloc_info);
+			}
+#endif
 			try {
 				pool.sets.resize(set_layouts.size());
-				VK_ vkAllocateDescriptorSets(hdv, &alloc_info, pool.sets.data())
+				VK_ vkAllocateDescriptorSets(hdv, &alloc_info, pool.sets.data<0u>())
 					| popup{ "[DESCRIPTOR POOL] Allocate descriptor sets failure." };
 
-				auto allocation = allocations.begin();
+				// auto its = pool.sets.begin();
+				auto set_index = 0u;
+
 				for (auto& child : childs_) {
+					uint32_t frame_count = child.frame_count();
 					child.bind(bind_descriptors{
 						.handle = &pool,
-						.first = allocation->first,
-						.frame_count = allocation->frame_count,
-						.set_count = allocation->set_count,
-						.set_offsets = ::std::move(allocation->set_offsets),
-						});
-					++allocation;
-					++pool.allocations;
+						.set = set_index,
+						.count = frame_count,
+					});
+					set_index += frame_count;
 				}
 				childs_.clear();
 			}
@@ -247,14 +318,13 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 		void reset() {
 			N::reset();
-			auto _ = locker_of(this);
-			for (auto& child : childs_) {
-				child.bind(bind_descriptors{});
+			// clean up all pool.
+			for (descriptor_pool& pool : pools_) {
 			}
-			childs_.clear();
 		}
 
 		void append(object_of<bind_set_> auto& child) {
+			auto _ = locker_of(this);
 			childs_.emplace_back(child);
 		}
 	
@@ -275,10 +345,10 @@ VKTL_EXPORT_ namespace vktl::detail {
 					}
 				}
 
-				assert(pool.allocations);
-				if (--pool.allocations == 0u) {
-					free(pool);
-				}
+				// assert(pool.allocations);
+				// if (== 0u) {
+				// 	free(pool);
+				// }
 			}
 		}
 

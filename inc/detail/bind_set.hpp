@@ -15,56 +15,80 @@
 // Descriptor materialization recursively accumulates trait-specific descriptor
 // infos and write records in one state tuple, records the frame-indexed sets,
 // and submits the resulting write list once at the bind-set base.
+// A framebuffer keeps its attachment image views independently from bind sets;
+// framebuffer/bind-set composition is intentionally not supported yet.
 // --------------------------------------------------------------------------
 
 VKTL_EXPORT_ namespace vktl::vptr {
 	template<typename Trait>
-	struct view_need_descriptor {
-		using host_handle_type = typename detail::trait<typename Trait::host>::handle_type;
-		using view_type = typename Trait::view_type;
-		using layout_type = typename Trait::layout;
-		using subresource_range = typename Trait::subresource_range;
+	struct view {
+		using view_type = detail::locked<typename Trait::view_type>;
+		using host_handle_type = detail::locked<typename detail::trait<typename Trait::host>::handle_type>;
 
 		template<typename C>
-		struct apply : C {
-			using base = C;
+		using base = apply_compose<C, frame_counted>;
+
+		template<typename C>
+		struct apply : base<C> {
+			using base = base<C>;
 
 			template<typename T>
 			void rebind() noexcept {
 				vptr = {
-					.handle_ = [](void const* ptr, uint32_t frame) -> host_handle_type {
+					.handle_ = [](void const* ptr, uint32_t frame) -> detail::locked<host_handle_type> {
+						return static_cast<T const*>(ptr)->host(frame);
+					},
+					.view_ = [](void const* ptr, uint32_t frame) -> detail::locked<view_type> {
 						return static_cast<T const*>(ptr)->handle(frame);
-					},
-					.view_ = [](void const* ptr, uint32_t frame) -> view_type {
-						return static_cast<T const*>(ptr)->view(frame);
-					},
-					.layout_ = [](void const* ptr) -> layout_type {
-						return static_cast<T const*>(ptr)->layout();
-					},
-					.range_ = [](void const* ptr) -> subresource_range {
-						return static_cast<T const*>(ptr)->subresource_range();
-					},
-					.frame_count_ = [](void const* ptr) -> uint32_t {
-						return static_cast<T const*>(ptr)->frame_count();
 					},
 				};
 			}
 
+			view_type view(uint32_t frame) const { return vptr.view_(C::get_this(), frame); }
 			host_handle_type handle(uint32_t frame) const { return vptr.handle_(C::get_this(), frame); }
-			view_type descriptor_view(uint32_t frame) const { return vptr.view_(C::get_this(), frame); }
-			layout_type layout() const { return vptr.layout_(C::get_this()); }
-			subresource_range range() const { return vptr.range_(C::get_this()); }
-			uint32_t frame_count() const { return vptr.frame_count_(C::get_this()); }
 
-		private:
-			view_need_descriptor vptr;
+			struct view vptr;
 		};
 
 		vfn<host_handle_type(uint32_t) const> handle_;
 		vfn<view_type(uint32_t) const> view_;
+	};
+
+	template<typename Trait>
+	struct view_need_descriptor {
+		using layout_type = typename Trait::layout;
+		using subresource_range = typename Trait::subresource_range;
+
+		template<typename C>
+		using base = apply_compose<C, view<Trait>>;
+
+		template<typename C>
+		struct apply : base<C> {
+			using base = base<C>;
+
+			template<typename T>
+			void rebind() noexcept {
+				vptr = {
+					.range_ = [](void const* ptr) -> subresource_range {
+						return static_cast<T const*>(ptr)->subresource_range();
+					},
+				};
+				if constexpr (!::std::is_void_v<layout_type>) {
+					vptr.layout_ = [](void const* ptr) -> layout_type {
+						return static_cast<T const*>(ptr)->layout();
+					};
+				}
+			}
+
+			layout_type layout() const { return vptr.layout_(C::get_this()); }
+			subresource_range range() const { return vptr.range_(C::get_this()); }
+
+			view_need_descriptor vptr;
+		};
+
+
 		vfn<layout_type() const> layout_;
 		vfn<subresource_range() const> range_;
-		vfn<uint32_t() const> frame_count_;
 	};
 }
 
@@ -167,17 +191,17 @@ VKTL_EXPORT_ namespace vktl::detail {
 			return handle.value.sets[set];
 		}
 
-	public:
-		void bind(default_resource_usage const&) {
-			assert(false && "bind_set does not allow this resource kind");
-		}
+		
 
 	protected:
-		static auto get_state() noexcept { return::std::tuple(bind::top{}); }
-
-		void bind(uint32_t, auto&) {
-			assert(false && "bind_set does not allow this resource view kind");
+		void bind(default_resource_usage const&) {
+			assert(!"bind_set does not allow this kind of resource.");
 		}
+		void bind(uint32_t, auto&) {
+			assert(!"bind_set does not allow this kind of resource view.");
+		}
+
+		static auto get_state() noexcept { return::std::tuple(bind::top{}); }
 
 		void bind(auto& state, bind_descriptors const& bind) {
 			if (bind_.handle) bind_.free();
@@ -329,7 +353,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 					if constexpr (::std::same_as<ViewTrait, trait<buffer_view_>>) {
 						if (uses_texel_view(point.type)) {
 							resource_state.texel_views.emplace_back(
-								point.view.descriptor_view(view_frame));
+								point.view.view(view_frame));
 							write.pTexelBufferView = &resource_state.texel_views.back();
 						}
 						else {
@@ -344,7 +368,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 					}
 					else {
 						resource_state.images.emplace_back(VK_ VkDescriptorImageInfo{
-							.imageView = point.view.descriptor_view(view_frame),
+							.imageView = point.view.view(view_frame),
 							.imageLayout = point.view.layout(),
 						});
 						write.pImageInfo = &resource_state.images.back();
@@ -359,18 +383,53 @@ VKTL_EXPORT_ namespace vktl::detail {
 	};
 
 	template<typename N>
-		requires(object_of<N, bind_set_>)
-	struct m<allow_buffer_, N>
+	struct m<bind_set_extensions::allow_buffer_, N>
 		: basic_allow_bind_resource<N, trait<buffer_view_>> {
 		using base = basic_allow_bind_resource<N, trait<buffer_view_>>;
 		constexpr m(allow_buffer_, auto&&...others) : base{ forward_(others)... } {}
 	};
 
 	template<typename N>
-		requires(object_of<N, bind_set_>)
-	struct m<allow_image_, N>
+	struct m<bind_set_extensions::allow_image_, N>
 		: basic_allow_bind_resource<N, trait<image_view_>> {
 		using base = basic_allow_bind_resource<N, trait<image_view_>>;
 		constexpr m(allow_image_, auto&&...others) : base{ forward_(others)... } {}
 	};
+}
+
+VKTL_EXPORT_ namespace vktl::detail {
+
+	template<>
+	struct trait<framebuffer_> {
+		using handle_type = VK_ VkFramebuffer;
+		static constexpr auto create = &VK_ vkCreateFramebuffer;
+		static constexpr auto destroy = &VK_ vkDestroyFramebuffer;
+	};
+
+	template<typename N>
+	struct m<framebuffer_, N> : basic_frame_indexed_handle<N, trait<framebuffer_>> {
+		using base = basic_frame_indexed_handle<N, trait<framebuffer_>>;
+		using attachment_view = box<vptr::view<trait<image_view_>>>;
+
+		static_assert(have_parent_of<N, graphics_pass>, "`framebuffer` must use *graphics pass* as parent.");
+
+		constexpr m(framebuffer_, auto&&...others)
+			: base{ forward_(others)... }
+		{ }
+
+		void bind(uint32_t attachment, object_of<image_view_> auto& view) {
+			auto _ = locker_of(this);
+			assert(view.frame_count() == 1u
+				|| view.frame_count() == this->frame_count());
+			if (attachments_.size() <= attachment) {
+				attachments_.resize(size_t(attachment) + 1u);
+			}
+			attachments_[attachment] = view;
+		}
+
+	protected:
+		VK_ VkFramebufferCreateInfo info{ .sType = VK_ VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO };
+		vector<attachment_view> attachments_;
+	};
+
 }

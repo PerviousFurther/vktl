@@ -165,16 +165,10 @@ VKTL_EXPORT_ namespace vktl::detail {
 			return info.subresourceRange;
 		}
 
-		auto handle(uint32_t frame) const noexcept {
-			auto value = parent_of<image>(this)->handle(frame);
-			return value.value;
+		auto host(uint32_t frame) const noexcept {
+			return parent_of<image>(this)->handle(frame);
 		}
-		auto handle() const noexcept { return handle(this->frame_index()); }
-		auto view(uint32_t frame) const noexcept {
-			auto value = base::handle(frame);
-			return value.value;
-		}
-		auto view() const noexcept { return view(this->frame_index()); }
+		auto host() const noexcept { return host(this->frame_index()); }
 		auto layout() const noexcept { return VK_ VK_IMAGE_LAYOUT_GENERAL; }
 
 		void upload_usage(VK_ VkImageUsageFlags usages) {

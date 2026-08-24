@@ -51,20 +51,20 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 	template<typename T>
 	struct express;
-	template<typename T>
-	struct skip;
-	template<typename T>
-	struct ignore;
+	// template<typename T>
+	// struct skip;
+	// template<typename T>
+	// struct ignore;
 
 	template<typename T>
 	concept can_express = ::std::default_initializable<express<T>>;
-	template<typename T>
-	concept can_skip = ::std::default_initializable<skip<T>>;
-	template<typename T>
-	concept can_ignore = ::std::default_initializable<ignore<T>>;
+	// template<typename T>
+	// concept can_skip = ::std::default_initializable<skip<T>>;
+	// template<typename T>
+	// concept can_ignore = ::std::default_initializable<ignore<T>>;
 
 	template<typename T>
-	concept on_chain = !can_express<T> && !can_skip<T> && !can_ignore<T>;
+	concept on_chain = !can_express<T> /*&& !can_skip<T> && !can_ignore<T>*/ ;
 
 	template<typename State, typename Types>
 	struct c;
@@ -91,17 +91,17 @@ VKTL_EXPORT_ namespace vktl::detail {
 			express<::std::remove_cvref_t<Ignored>>::invoke(forward_(first), *this);
 		}
 
-		template<typename Ignored, typename...Args>
-		constexpr c(Ignored&& first, Args&&...infos)
-			requires(can_skip<::std::remove_cvref_t<Ignored>>)
-			: c(forward_(first), forward_(infos)...) {
-		}
-
-		template<typename Ignored, typename...Args>
-		constexpr c(Ignored&&, Args&&...infos)
-			requires(can_ignore<::std::remove_cvref_t<Ignored>>)
-			: c(forward_(infos)...) {
-		}
+		// template<typename Ignored, typename...Args>
+		// constexpr c(Ignored&& first, Args&&...infos)
+		// 	requires(can_skip<::std::remove_cvref_t<Ignored>>)
+		// 	: c(forward_(first), forward_(infos)...) {
+		// }
+		// 
+		// template<typename Ignored, typename...Args>
+		// constexpr c(Ignored&&, Args&&...infos)
+		// 	requires(can_ignore<::std::remove_cvref_t<Ignored>>)
+		// 	: c(forward_(infos)...) {
+		// }
 	};
 	template<size_t index, typename Types>
 		requires(index >= tuple_size_v<Types>)
@@ -180,8 +180,8 @@ VKTL_EXPORT_ namespace vktl::detail {
 	struct s_;
 
 	template<typename...Args>
-	struct ob_ : ob_<b<empty>, Args...> {
-		using next = ob_<b<empty>, Args...>;
+	struct f_ : f_<b<empty>, Args...> {
+		using next = f_<b<empty>, Args...>;
 
 		static constexpr auto make_tuple(auto&&...values) {
 			return next::make_tuple(::std::tuple(), ::std::tuple(), forward_(values)...);
@@ -191,13 +191,12 @@ VKTL_EXPORT_ namespace vktl::detail {
 		static constexpr auto make_tuple(s_<RArgs...>&& v) {
 			return::std::apply([](auto&&...values) { return make_tuple(forward_(values)...); }, v.as_tuple());
 		}
-		
 	};
 
 	template<typename...Cs, typename C, typename First, typename...Args>
 		requires(on_chain<First>)
-	struct ob_<b<C, Cs...>, First, Args...> : ob_<b<C, First, Cs...>, Args...> {
-		using next = ob_<b<C, First, Cs...>, Args...>;
+	struct f_<b<C, Cs...>, First, Args...> : f_<b<C, First, Cs...>, Args...> {
+		using next = f_<b<C, First, Cs...>, Args...>;
 		using first = First;
 
 		static constexpr auto make_tuple(auto first, auto second, auto&& fir, auto&&...values) {
@@ -208,9 +207,8 @@ VKTL_EXPORT_ namespace vktl::detail {
 	};
 	template<typename...Cs, typename First, typename...Args>
 		requires(!on_chain<First>)
-	struct ob_<b<Cs...>, First, Args...> : ob_<b<Cs...>, Args...> {
-		using next = ob_<b<Cs...>, Args...>;
-
+	struct f_<b<Cs...>, First, Args...> : f_<b<Cs...>, Args...> {
+		using next = f_<b<Cs...>, Args...>;
 		static constexpr auto make_tuple(auto first, auto second, auto&& fir, auto&&...values) {
 			return next::make_tuple(::std::move(first), 
 				::std::tuple_cat(::std::forward_as_tuple(forward_(fir)), ::std::move(second)),
@@ -242,8 +240,8 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 	// already have base.
 	template<typename C, typename...Cs, typename T, typename...Us, typename...Args>
-	struct ob_<b<C, from<Us...>, Cs...>, object<T>, Args...> : ob_<b<C, from<Us..., object<T>>, Cs...>, Args...> {
-		using next = ob_<b<C, from<Us..., object<T>>, Cs...>, Args...>;
+	struct f_<b<C, from<Us...>, Cs...>, object<T>, Args...> : f_<b<C, from<Us..., object<T>>, Cs...>, Args...> {
+		using next = f_<b<C, from<Us..., object<T>>, Cs...>, Args...>;
 
 		static constexpr auto make_tuple(auto first, auto second, object<T>& fir, auto&&...args) {
 			return next::make_tuple(::std::tuple_cat(::std::move(first), ::std::forward_as_tuple(fir)), ::std::move(second), forward_(args)...);
@@ -251,8 +249,8 @@ VKTL_EXPORT_ namespace vktl::detail {
 		static constexpr auto make_tuple(auto, auto, object<T>&&, auto&&...) = delete; // not allow right value reference on object.
 	};
 	template<typename C, typename...Cs, typename T, typename...Args>
-	struct ob_<b<C, Cs...>, object<T>, Args...> : ob_<b<C, from<object<T>>, Cs...>, Args...> {
-		using next = ob_<b<C, from<object<T>>, Cs...>, Args...>;
+	struct f_<b<C, Cs...>, object<T>, Args...> : f_<b<C, from<object<T>>, Cs...>, Args...> {
+		using next = f_<b<C, from<object<T>>, Cs...>, Args...>;
 
 		static constexpr auto make_tuple(auto, auto second, object<T>& fir, auto&&...args) {
 			return next::make_tuple(::std::forward_as_tuple(fir), ::std::move(second), forward_(args)...);
@@ -261,8 +259,8 @@ VKTL_EXPORT_ namespace vktl::detail {
 	};
 
 	template<typename C, typename...Cs, typename T, typename...Args>
-	struct ob_<b<C, Cs...>, use_base<T>, Args...> : ob_<b<T, Cs...>, Args...> {
-		using next = ob_<b<T, Cs...>, Args...>;
+	struct f_<b<C, Cs...>, use_base<T>, Args...> : f_<b<T, Cs...>, Args...> {
+		using next = f_<b<T, Cs...>, Args...>;
 		static constexpr auto make_tuple(auto first, auto second, use_base<T>, auto&&...args) {
 			return next::make_tuple(::std::move(first), ::std::move(second), forward_(args)...);
 		}
@@ -329,7 +327,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 		using base = typename T::type;
 
 		template<typename...Args>
-			requires(((tuple_specialization_of<Args, object> || !tuple_specialization_of<Args, s_> || creation_tag<Args>) && ...))
+			requires(((tuple_specialization_of<Args, object> || tuple_specialization_of<Args, s_> || creation_tag<Args>) && ...))
 		constexpr object(Args&&...args)
 			: object{ T::make_tuple(static_cast<Args&&>(args)...) } { 
 			base::finalize();
@@ -389,12 +387,12 @@ VKTL_EXPORT_ namespace vktl::detail {
 		}
 	};
 	template<typename...Args>
-	object(Args&&...) -> object<ob_<::std::remove_cvref_t<Args>...>>;
+	object(Args&&...) -> object<f_<::std::remove_cvref_t<Args>...>>;
 	template<typename...Args>
-	object(s_<Args...>&&) -> object<ob_<Args...>>;
+	object(s_<Args...>&&) -> object<f_<Args...>>;
 
 	template<typename...Cs>
-	struct ob_<b<Cs...>> {
+	struct f_<b<Cs...>> {
 		using type = c<i<1u>, b<Cs...>>;
 		static constexpr auto make_tuple(auto first, auto second) {
 			return::std::apply([&](auto&...ref) {
@@ -410,8 +408,124 @@ VKTL_EXPORT_ namespace vktl::detail {
 		}
 	};
 
-	// template<typename T, typename E>
-	// struct is_extend : ::std::false_type {};
+	template<typename C, typename...Rs>
+	struct l_ : C {
+	protected:
+		static constexpr void begin() noexcept {}
+		static constexpr void end() noexcept {}
+		static constexpr void finalize() noexcept {}
+	};
+
+	template<typename...Args>
+	struct u_ : u_<l_<empty>, Args...> {
+		using next = u_<l_<empty>, Args...>;
+		template<typename...Prms>
+		static constexpr auto make_tuple(Prms&&...values) {
+			return next::make_tuple(::std::tuple(), static_cast<Prms&&>(values)...);
+		}
+		template<typename...Prms>
+		static constexpr auto make_tuple(s_<Prms...> values) {
+			return::std::apply([](Prms...value) { return make_tuple(static_cast<Prms&&>(values)...); }, values.as_tuple());
+		}
+	};
+
+
+	template<typename C, typename...Ts, typename First, typename...Args>
+	struct u_<l_<C, Ts...>, First, Args...> : u_<l_<C, First, Ts...>, Args...> {
+		using next = u_<l_<C, First, Ts...>, Args...>;
+		static constexpr auto make_tuple(auto first, auto&& f, auto&&...values) {
+			return next::make_tuple(::std::tuple_cat(::std::forward_as_tuple(forward_(f)), ::std::move(first)), forward_(values)...);
+		}
+	};
+
+	template<typename T>
+	concept command_tag = ::std::is_class_v<T>;
+
+	template<typename T>
+	struct commands : T::type {
+		using base = T::type;
+		template<typename...Args>
+			requires(((tuple_specialization_of<Args, commands> || tuple_specialization_of<Args, s_> || command_tag<Args>) && ...))
+		constexpr commands(Args&&...vals)
+			: commands{ T::make_tuple(static_cast<Args&&>(vals)...) } {
+			base::finalize();
+		}
+
+		void invoke() {
+			base::begin();
+			base::end();
+		}
+
+		template<typename O>
+			requires(command_tag<O>)
+		constexpr auto operator|(O other) & {
+			return s_<commands&, O>{ *this, other };
+		}
+		template<typename O>
+		constexpr auto operator|(commands<O>& other) & {
+			return s_<commands&, commands<O>&>{ *this, other };
+		}
+
+	private:
+		template<typename...Args, ::std::size_t...ids>
+		constexpr commands(::std::index_sequence<ids...>, ::std::tuple<Args...> vals)
+			: base{static_cast<Args>(get<ids>(::std::move(vals)))...}
+		{}
+		template<typename...Args>
+		constexpr commands(::std::tuple<Args...> vals)
+			: commands{::std::make_index_sequence<sizeof...(Args)>(), ::std::move(vals)}
+		{}
+	};
+	template<typename...Args>
+	commands(Args&&...) -> commands<u_<::std::remove_cvref_t<Args>...>>;
+	template<typename...Args>
+	commands(s_<Args...>&&) -> commands<u_<::std::remove_cvref_t<Args>...>>;
+
+	template<typename...Ts>
+	struct combine : ::std::tuple<Ts*...> {
+		using base = ::std::tuple<Ts*...>;
+		combine(Ts&...vals) : base{ &vals... } {}
+		combine(::std::tuple<Ts*...> const& vals) : base{vals} {}
+	};
+
+	template<typename C, typename F, typename...Rs, typename...Args>
+	struct u_<l_<C, Rs...>, commands<F>, Args...> : u_<l_<C, combine<commands<F>>, Rs...>, Args...> {
+		using next = u_<l_<C, commands<F>>, Args...>;
+		static constexpr auto make_tuple(auto f, commands<F>& first, auto&&...values) {
+			return next::make_tuple(::std::tuple_cat(::std::move(f), ::std::forward_as_tuple(combine{ first })), forward_(values)...);
+		}
+	};
+
+	template<typename C, typename F, typename...Cs, typename...Rs, typename...Args>
+	struct u_<l_<C, combine<Cs...>, Rs...>, commands<F>, Args...> : u_<l_<C, combine<commands<F>, Cs...>, Rs...>, Args...> {
+		using next = u_<l_<C, combine<commands<F>, Cs...>, Rs...>, Args...>;
+		static constexpr auto make_tuple(auto f, commands<F>& first, auto&&...values) {
+			return make_tuple_impl(::std::make_index_sequence<sizeof...(Rs)>(), ::std::move(f), first, forward_(values)...);
+		}
+		template<::std::size_t...ids>
+		static constexpr auto make_tuple_impl(::std::index_sequence<ids...>, auto f, commands<F>& first, auto&&...values) {
+			return next::make_tuple(
+				::std::forward_as_tuple(
+					::std::apply([&](auto&&...vals) { return combine{ first, *vals... }; }, get<0u>(::std::move(f))),
+					get<ids + 1>(::std::move(f))...), forward_(values)...);
+		}
+	};
+
+	template<typename C, typename...Cs, typename T, typename...Args>
+	struct u_<l_<C, Cs...>, use_base<T>, Args...> : u_<l_<T, Cs...>, Args...> {
+		using next = f_<b<T, Cs...>, Args...>;
+		static constexpr auto make_tuple(auto first, use_base<T>, auto&&...args) {
+			return next::make_tuple(::std::move(first), forward_(args)...);
+		}
+	};
+
+	template<typename...Cs>
+	struct u_<l_<Cs...>> {
+		using type = c<i<1u>, l_<Cs...>>;
+		static constexpr auto make_tuple(auto f) {
+			return::std::move(f);
+		}
+	};
 
 	template<typename...Ts>
 	struct s_ : ::std::tuple<Ts...> {
@@ -423,7 +537,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 		template<typename T>
 		struct ref_if_object : ::std::remove_cvref<T> {};
 		template<typename T>
-			requires(tuple_specialization_of<T, object>)
+			requires(tuple_specialization_of<T, object> || tuple_specialization_of<T, commands>)
 		struct ref_if_object<T> : ::std::type_identity<::std::remove_cvref_t<T>&> {};
 
 		template<typename...Args, size_t...ids>
@@ -448,17 +562,21 @@ VKTL_EXPORT_ namespace vktl::detail {
 				::std::make_index_sequence<sizeof...(Ts) + sizeof...(Os)>()); 
 		}
 
-		constexpr operator object<ob_<::std::remove_reference_t<Ts>...>>() && noexcept { 
+		constexpr operator object<f_<::std::remove_reference_t<Ts>...>>() && noexcept { 
 			return::std::apply([](auto&&...vals) { return object{ forward_(vals)... }; }, as_tuple());
 		}
+		constexpr operator commands<f_<::std::remove_reference_t<Ts>...>>() && noexcept {
+			return::std::apply([](auto&&...vals) { return commands{ forward_(vals)... }; }, as_tuple());
+		}
+
 	};
 
 	template<typename...Ts>
 	struct tuple_like<s_<Ts...>> : ::std::true_type {};
 
 	template<typename C, typename...Cs, typename...Ts, typename...Args>
-	struct ob_<b<C, Cs...>, s_<Ts...>, Args...> : ob_<b<C, Cs...>, ::std::remove_reference_t<Ts>..., Args...> {
-		using next = ob_<b<C, Cs...>, ::std::remove_reference_t<Ts>..., Args...>;
+	struct f_<b<C, Cs...>, s_<Ts...>, Args...> : f_<b<C, Cs...>, ::std::remove_reference_t<Ts>..., Args...> {
+		using next = f_<b<C, Cs...>, ::std::remove_reference_t<Ts>..., Args...>;
 
 		static constexpr auto make_tuple(auto first, auto second, s_<Ts...>&& ia, auto&&...args) {
 			return::std::apply(

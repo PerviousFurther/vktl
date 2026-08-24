@@ -616,14 +616,6 @@ VKTL_EXPORT_ namespace vktl {
 		uint32_t family = 0u;
 	} queue{}; // since family 0 is always most generic.
 
-
-	namespace task_extensions {
-		using extensions::debug_named;
-		inline constexpr struct transient_ {} transient {};
-		inline constexpr struct reset_pool_ {} reset_pool {};
-		inline constexpr struct reset_command_buffer_ {} reset_command_buffer {};
-		inline constexpr struct free_command_buffer_ {} free_command_buffer {};
-	}
 	template<typename Fn>
 	struct task { Fn func; };
 
@@ -787,9 +779,6 @@ VKTL_EXPORT_ namespace vktl {
 	namespace allocator_extensions {
 		using extensions::allocate_from;
 		using extensions::debug_named;
-
-		// allocate layout.
-		
 	}
 	namespace memory_allocator_extensions {
 		using namespace allocator_extensions;
@@ -875,9 +864,7 @@ VKTL_EXPORT_ namespace vktl {
 	}
 	inline constexpr struct image_view_ {} image_view {};
 
-	struct uniform_buffer {
-		uint32_t index;
-	};
+	struct uniform_buffer { uint32_t index; };
 
 	namespace attachment_attribute {
 		using type = uint16_t;
@@ -896,27 +883,20 @@ VKTL_EXPORT_ namespace vktl {
 	}
 
 	struct attachment {
-		uint16_t index = invalid;
-		attachment_attribute::type attribute =
-			attachment_attribute::color
+		uint16_t index = invalid; // index == invalid will consider as append.
+		attachment_attribute::type attribute 
+			= attachment_attribute::color
 			| attachment_attribute::clear
 			| attachment_attribute::store;
 	};
 	
-	namespace descriptor_set_extensions {
+	namespace bind_set_extensions {
 		using extensions::debug_named;
-
-		using memory_allocator_extensions::allow_buffer;
-		using memory_allocator_extensions::allow_image;
-
+		inline constexpr struct allow_buffer_ {} allow_buffer {};
+		inline constexpr struct allow_image_ {} allow_image {};
 		inline constexpr struct allow_mutable_ {} allow_mutable {};
 	}
 	inline constexpr struct bind_set_ {} bind_set {};
-
-	struct set_point {
-		uint32_t binding;
-		uint32_t flags = 0u;
-	};
 
 	// BEGIN PASS.
 
@@ -1049,40 +1029,12 @@ VKTL_EXPORT_ namespace vktl {
 		inline constexpr struct render_pass_ {} render_pass {};
 	}
 	inline constexpr struct pass_ {} pass;
+
+	namespace framebuffer_extensinons {
+		using extensions::allocate_from;
+
+	}
+
+	inline constexpr struct framebuffer_ {} framebuffer {};
 }
 
-
-VKTL_EXPORT_ namespace vktl::emit {
-	// using vktl::set_event;
-	// using vktl::reset_event;
-
-	struct wait_semaphores {
-		::std::span<uint16_t> indices;
-	};
-	struct wait_fences {
-		::std::span<uint16_t> indices;
-	};
-
-	struct update_buffer_view {
-
-	};
-
-	struct update_image_view {
-
-	};
-
-	struct update_buffer {
-
-	};
-
-	struct update_image {
-
-	};
-
-	struct execute {};
-	struct record {};
-	struct submit {};
-	struct refresh {};
-	// struct recreate_swapchain{};
-
-}

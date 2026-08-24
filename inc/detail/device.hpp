@@ -132,13 +132,21 @@ VKTL_EXPORT_ namespace vktl::detail {
 	namespace queues {
 		queue_duty::type to_duty(VK_ VkQueueFlags vk_flags) {
 			queue_duty::type result = queue_duty::none;
-			if (vk_flags & VK_QUEUE_COMPUTE_BIT)        result |= queue_duty::compute;
-			if (vk_flags & VK_QUEUE_TRANSFER_BIT)       result |= queue_duty::transfer;
-			if (vk_flags & VK_QUEUE_GRAPHICS_BIT)       result |= queue_duty::graphics;
-			if (vk_flags & VK_QUEUE_SPARSE_BINDING_BIT) result |= queue_duty::bind_sparse;
+			if (vk_flags & VK_ VK_QUEUE_COMPUTE_BIT)        result |= queue_duty::compute;
+			if (vk_flags & VK_ VK_QUEUE_TRANSFER_BIT)       result |= queue_duty::transfer;
+			if (vk_flags & VK_ VK_QUEUE_GRAPHICS_BIT)       result |= queue_duty::graphics;
+			if (vk_flags & VK_ VK_QUEUE_SPARSE_BINDING_BIT) result |= queue_duty::bind_sparse;
 			return result;
 		}
 	}
+
+	struct queue_duty_family {
+		uint16_t family;
+		queue_duty::type duty;
+	};
+
+	template<typename T>
+	struct device_querion;
 
 	template<typename N>
 	struct basic_device : basic_extensions<N> {
@@ -175,8 +183,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 		void init() {
 			if (!handle_) {
-				N::init();
-				if (!phydv_) phydv_ = parent_of<instance>(this)->physical_device(device_index_);
+				init_phydv();
 				VK_ vkCreateDevice(phydv_, &info, N::allocator(), &handle_) 
 					| popup{ "[Device] Create device failure." };
 				(void)this->create(default_descriptor_set_layout{});
@@ -200,6 +207,11 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 		auto handle() const noexcept { return handle_.value; }
 		auto physical_device() const noexcept { return phydv_; }
+
+		template<typename...Ts>
+		constexpr bool support() {
+			return ((device_querion<Ts>::query(phydv_)) && ...);
+		}
 
 		VK_ VkDescriptorSetLayout create(default_descriptor_set_layout value) {
 			auto _ = locker_of(this);
@@ -335,11 +347,14 @@ VKTL_EXPORT_ namespace vktl::detail {
 		// WARNING: if you using this function, then `instance` or `device group` will be initialized.
 		vector<queue_duty::type> queue_family_duties() const {
 			assert(!phydv_); // Only allow acquire once. // Cannot acquire family duties after initialization.
-			N::init();
-			phydv_ = parent_of<instance>(this)->physical_device(device_index_);
+			init_phydv();
 			vector<VK_ VkQueueFamilyProperties> props;
 			vkget(props, VK_ vkGetPhysicalDeviceQueueFamilyProperties, phydv_);
-			return::std::ranges::transform(props, [&](auto& props) { return queues::to_duty(props.queueFlags); });
+			vector<queue_duty_family> result(props.size());
+			uint16_t family_index = 0u;
+			(void)::std::ranges::transform(props, result.begin(), [&](auto& props) {
+				return queue_duty_family{ family_index++, queues::to_duty(props.queueFlags) }; });
+			return result;
 		}
 
 #if VKTL_HAVE_WINDOW
@@ -370,6 +385,15 @@ VKTL_EXPORT_ namespace vktl::detail {
 			};
 		};
 		vectors<VK_ VkDeviceQueueCreateInfo, vector<float>> queue_infos;
+
+	private:
+		void init_phydv() {
+			if (!phydv_) {
+				N::init();
+				phydv_ = parent<instance>(this)->physical_device(device_index_);
+			}
+		}
+
 
 	private:
 		uint32_t device_index_ = 0u;
