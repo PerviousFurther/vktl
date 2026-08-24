@@ -1,5 +1,9 @@
 #pragma once
 
+// Agents specification:
+// Parent type searches are consteval index enumerations. Runtime traversal must
+// dereference parent links only through the indexed parent<index>() overload.
+//
 // Interface style: reusable vptr capabilities and parent-link mixins connect
 // independently composed objects without virtual inheritance.
 // Implementation: each vptr stores explicit function pointers, while `from`
@@ -24,14 +28,14 @@ VKTL_EXPORT_ namespace vktl::vptr {
 
 		template<typename T>
 		void rebind() {
-			vptr_.init_ = [](void* ptr) { static_cast<T*>(ptr)->init(); };
+			vptr.init_ = [](void* ptr) { static_cast<T*>(ptr)->init(); };
 		}
 
 		void init() {
-			vptr_.init_(C::get_this());
+			vptr.init_(C::get_this());
 		}
 
-		initable vptr_;
+		initable vptr;
 	};
 
 	// -----------------------------------------------------------------------------
@@ -51,14 +55,14 @@ VKTL_EXPORT_ namespace vktl::vptr {
 		template<typename T>
 		void rebind() {
 			this->template rebind_next<T>(this);
-			vptr_.reset_ = [](void* ptr) { static_cast<T*>(ptr)->reset(); };
+			vptr.reset_ = [](void* ptr) { static_cast<T*>(ptr)->reset(); };
 		}
 
 		void reset() {
-			vptr_.reset_(C::get_this());
+			vptr.reset_(C::get_this());
 		}
 
-		resetable vptr_;
+		resetable vptr;
 	};
 
 	template<typename C>
@@ -84,16 +88,16 @@ VKTL_EXPORT_ namespace vktl::vptr {
 
 		template<typename T>
 		void rebind() {
-			vptr_.handle_ = [](const void* ptr) -> handle_type {
+			vptr.handle_ = [](const void* ptr) -> handle_type {
 				return static_cast<const T*>(ptr)->handle();
 				};
 		}
 
 		handle_type handle() const {
-			return vptr_.handle_(C::get_this());
+			return vptr.handle_(C::get_this());
 		}
 
-		handle_owner vptr_;
+		handle_owner vptr;
 	};
 
 	// -----------------------------------------------------------------------------
@@ -115,17 +119,17 @@ VKTL_EXPORT_ namespace vktl::vptr {
 
 		template<typename T>
 		void rebind() {
-			vptr_.remove_element_ =
+			vptr.remove_element_ =
 				[](void* ptr, element_type* element) {
 				static_cast<T*>(ptr)->remove_from_handle(element);
 				};
 		}
 
 		void remove(element_type* element) {
-			vptr_.remove_element_(C::get_this(), element);
+			vptr.remove_element_(C::get_this(), element);
 		}
 
-		element_of vptr_;
+		element_of vptr;
 	};
 
 	// -----------------------------------------------------------------------------
@@ -151,28 +155,28 @@ VKTL_EXPORT_ namespace vktl::vptr {
 		template<typename T>
 		void rebind() {
 			if constexpr (::std::is_void_v<V>) {
-				vptr_.notifier_ = [](void* ptr) { static_cast<T*>(ptr)->unbind(); };
+				vptr.notifier_ = [](void* ptr) { static_cast<T*>(ptr)->unbind(); };
 			}
 			else {
-				vptr_.notifier_
+				vptr.notifier_
 					= [](void* ptr, V value) { static_cast<T*>(ptr)->unbind(::std::move(value)); };
 			}
 		}
 
 		void unbind() {
 			if constexpr (::std::is_void_v<V>) {
-				vptr_.notifier_(C::get_this());
+				vptr.notifier_(C::get_this());
 			}
 			else {
-				vptr_.notifier_(C::get_this(), V());
+				vptr.notifier_(C::get_this(), V());
 			}
 		}
 
 		void unbind(V value) requires(!::std::is_void_v<V>) {
-			vptr_.notifier_(C::get_this(), static_cast<V>(value));
+			vptr.notifier_(C::get_this(), static_cast<V>(value));
 		}
 
-		unbindable vptr_;
+		unbindable vptr;
 	};
 
 	// -----------------------------------------------------------------------------
@@ -196,10 +200,10 @@ VKTL_EXPORT_ namespace vktl::vptr {
 		template<typename T>
 		void rebind() {
 			if constexpr (::std::is_void_v<V>) {
-				vptr_.notifier_ = [](void* ptr) { static_cast<T*>(ptr)->bind(); };
+				vptr.notifier_ = [](void* ptr) { static_cast<T*>(ptr)->bind(); };
 			}
 			else {
-				vptr_.notifier_
+				vptr.notifier_
 					= [](void* ptr, V value) {
 					static_cast<T*>(ptr)->bind(static_cast<V>(value)); };
 			}
@@ -207,18 +211,18 @@ VKTL_EXPORT_ namespace vktl::vptr {
 
 		void bind() {
 			if constexpr (::std::is_void_v<V>) {
-				vptr_.notifier_(C::get_this());
+				vptr.notifier_(C::get_this());
 			}
 			else {
-				vptr_.notifier_(C::get_this(), V());
+				vptr.notifier_(C::get_this(), V());
 			}
 		}
 
 		void bind(V value) requires(!::std::is_void_v<V>) {
-			vptr_.notifier_(C::get_this(), ::std::move(value));
+			vptr.notifier_(C::get_this(), ::std::move(value));
 		}
 
-		bindable vptr_;
+		bindable vptr;
 	};
 
 	// -----------------------------------------------------------------------------
@@ -239,7 +243,7 @@ VKTL_EXPORT_ namespace vktl::vptr {
 
 		template<typename T>
 		void rebind() {
-			vptr_ = {
+			vptr = {
 				.parent_ = [](void* ptr) -> box<VPtr> {
 					return static_cast<T*>(ptr)->template parent<Ts...>();
 				},
@@ -251,7 +255,7 @@ VKTL_EXPORT_ namespace vktl::vptr {
 		}
 
 	private:
-		child_of vptr_;
+		child_of vptr;
 	};
 
 }
@@ -299,6 +303,14 @@ VKTL_EXPORT_ namespace vktl::detail {
 		{
 		}
 
+		// shared object usaully not on stack, copy or move is forbidden.
+
+		m(m const&) = delete;
+		m& operator=(m const&) = delete;
+		m(m&&) = delete;
+		m& operator=(m&&) = delete;
+		
+
 		uint32_t add_ref() noexcept {
 			::std::lock_guard _{ N::get_lock() };
 			assert(refc_); // try add from on zero from's object.
@@ -315,6 +327,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 		uint32_t refc_ = 1u;
 	};
 
+	// cross thread shared object usaully not on stack, copy or move is forbidden.
 	template<typename N>
 	struct m<cross_thread_shared_, N> : N {
 
@@ -352,7 +365,19 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 		template<typename...Qs>
 		constexpr auto parent() const noexcept {
-			return parent_direct<0u, Qs...>(this);
+			constexpr auto direct_index = parent_direct<0u, Qs...>();
+			if constexpr (direct_index < num_parents) {
+				return parent<direct_index>();
+			}
+			else {
+				constexpr auto recursive_index = parent_recursive<0u, Qs...>();
+				if constexpr (recursive_index < num_parents) {
+					return parent<recursive_index>()->template parent<Qs...>();
+				}
+				else {
+					return nullptr;
+				}
+			}
 		}
 
 		template<size_t index>
@@ -365,7 +390,9 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 		template<typename T>
 		constexpr auto all_parent() const noexcept {
-			return all_parent_impl<T, 0u>(this);
+			return [this]<size_t...indices>(::std::index_sequence<indices...>) {
+				return::std::tuple(parent<indices>()...);
+			}(all_parent_impl<0u, T>());
 		}
 
 	protected:
@@ -376,55 +403,50 @@ VKTL_EXPORT_ namespace vktl::detail {
 		// }
 
 	private:
-		template<size_t index, typename...Qs>
-		static constexpr auto all_parent_impl(auto pthis, auto...ptrs) {
+		template<size_t index, typename...Qs, size_t...indices>
+		static consteval auto all_parent_impl(::std::index_sequence<indices...> = {}) {
 			if constexpr (index < num_parents) {
 				if constexpr (object_of<tuple_at_t<index, parents>, Qs...>) {
-					return all_parent_impl<index + 1u, Qs...>(ptrs..., get<index>(pthis->parents_));
+					return all_parent_impl<index + 1u, Qs...>(
+						::std::index_sequence<indices..., index>{});
 				}
 				else {
-					return all_parent_impl<index + 1u, Qs...>(ptrs...);
+					return all_parent_impl<index + 1u, Qs...>(
+						::std::index_sequence<indices...>{});
 				}
 			}
 			else {
-				return::std::tuple(ptrs...);
+				return::std::index_sequence<indices...>{};
 			}
 		}
 
 		template<size_t index = 0u, typename...Qs>
-		static constexpr auto parent_direct(auto pthis) noexcept {
+		static consteval size_t parent_direct() noexcept {
 			if constexpr (index < num_parents) {
 				if constexpr (object_of<tuple_at_t<index, parents>, Qs...>) {
-					return pthis->template parent<index>();
+					return index;
 				}
 				else {
-					return parent_direct<index + 1, Qs...>(pthis);
+					return parent_direct<index + 1, Qs...>();
 				}
 			}
 			else {
-				return parent_recursive<0u, Qs...>(pthis);
+				return num_parents;
 			}
 		}
 
 		template<size_t index = 0u, typename...Qs>
-		static constexpr auto parent_recursive(auto pthis) noexcept {
+		static consteval size_t parent_recursive() noexcept {
 			if constexpr (index < num_parents) {
-				auto pparent = pthis->template parent<index>();
-				if constexpr (requires { pparent->template parent<Qs...>(); }) {
-					auto presult = pparent->template parent<Qs...>();
-					if constexpr (!::std::is_null_pointer_v<decltype(presult)>) {
-						return presult;
-					}
-					else {
-						return parent_recursive<index + 1, Qs...>(pthis);
-					}
+				if constexpr (!::std::is_null_pointer_v<parent_t<tuple_at_t<index, parents>, Qs...>>) {
+					return index;
 				}
 				else {
-					return parent_recursive<index + 1, Qs...>(pthis);
+					return parent_recursive<index + 1, Qs...>();
 				}
 			}
 			else {
-				return nullptr;
+				return num_parents;
 			}
 		}
 
@@ -436,17 +458,12 @@ VKTL_EXPORT_ namespace vktl::detail {
 	struct m<lockable_, N> : N {
 		using mutex_type = ::std::mutex;
 
-		m(lockable_, auto&&...others) : N{} {}
+		m(lockable_, auto&&...others) : N{forward_(others)...} {}
 
-		auto init() {
-			return::std::unique_lock(lock_);
-		}
-		auto reset() {
-			return::std::unique_lock(lock_);
-		}
+		auto& get_lock() const noexcept { return lock_; }
 
 	private:
-		mutable::std::mutex lock_;
+		mutable mutex_type lock_;
 	};
 
 	template<typename T>

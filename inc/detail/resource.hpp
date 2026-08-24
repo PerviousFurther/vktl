@@ -29,16 +29,16 @@ VKTL_EXPORT_ namespace vktl::vptr {
 
 			template<typename T>
 			void rebind() {
-				vptr_ = { 
+				vptr = { 
 					.free_suballoc_ = [](void* ptr, handle_info handle) {
 						static_cast<T*>(ptr)->free(handle);
 					},
 				};
 			}
 
-			void free(handle_info handle) { vptr_.free_suballoc_(C::get_this(), handle); }
+			void free(handle_info handle) { vptr.free_suballoc_(C::get_this(), handle); }
 
-			freeable vptr_;
+			freeable vptr;
 		};
 
 		vfn<void(handle_info)> free_suballoc_;
@@ -66,52 +66,52 @@ VKTL_EXPORT_ namespace vktl::vptr {
 			template<typename T>
 			void rebind() {
 				if constexpr (requires (T & v) { { v.memory_flags() } -> ::std::convertible_to<span<default_memory_flags const>>; }) {
-					vptr_.memories_flags_ = [](void const* ptr) -> span<default_memory_flags const> {
+					vptr.memories_flags_ = [](void const* ptr) -> span<default_memory_flags const> {
 						return static_cast<T const*>(ptr)->memory_flags();
 						};
 				}
 				else if (requires (T & v) { { v.memory_flags() } -> ::std::convertible_to<default_memory_flags>; }) {
-					vptr_.memory_flags_ = [](void const* ptr) -> default_memory_flags {
+					vptr.memory_flags_ = [](void const* ptr) -> default_memory_flags {
 						return static_cast<T const*>(ptr)->memory_flags();
 					};
 				}
 				else {
-					vptr_.memory_flags_ = [](void const*) {
+					vptr.memory_flags_ = [](void const*) {
 						return default_memory_flags(0u);
 						};
 				}
 #if defined(VK_KHR_get_memory_requirements2)
 				if constexpr (requires (T const& v, ext_memreq& value) { v.memory_requirement(value, 0u); }) {
-					vptr_.memory_requirement_ = [](void const* ptr, ext_memreq& v, uint32_t i) {
+					vptr.memory_requirement_ = [](void const* ptr, ext_memreq& v, uint32_t i) {
 						static_cast<T const*>(ptr)->memory_requirement(v, i);
 						};
 				}
 				else if constexpr (requires (T const& v, ext_memreq& value) { v.memory_requirement(value); }) {
-					vptr_.memory_requirement_ = [](void const* ptr, ext_memreq& v, uint32_t) {
+					vptr.memory_requirement_ = [](void const* ptr, ext_memreq& v, uint32_t) {
 						static_cast<T const*>(ptr)->memory_requirement(v);
 						};
 				}
 #endif
 				if constexpr (requires (T const& v) { { v.is_tiling() } -> ::std::convertible_to<bool>; }) {
-					vptr_.is_tiling_ = [](void const* ptr) -> bool { return static_cast<T const*>(ptr)->is_tiling(); };
+					vptr.is_tiling_ = [](void const* ptr) -> bool { return static_cast<T const*>(ptr)->is_tiling(); };
 				}
 				else {
-					vptr_.is_tiling_ = [](void const*) { return false; };
+					vptr.is_tiling_ = [](void const*) { return false; };
 				}
 			}
 
 #if defined(VK_KHR_get_memory_requirements2)
-			bool customized() const noexcept { return vptr_.memory_requirement_; }
+			bool customized() const noexcept { return vptr.memory_requirement_; }
 			void memory_requirement(ext_memreq& req, uint32_t index) {
-				vptr_.memory_requirement_(C::get_this(), req, index);
+				vptr.memory_requirement_(C::get_this(), req, index);
 			}
 #endif
-			bool multiple() const noexcept { return vptr_.memories_flags_; }
+			bool multiple() const noexcept { return vptr.memories_flags_; }
 
-			default_memory_flags memory_flags() const noexcept { return vptr_.memory_flags_(C::get_this()); }
-			default_memory_flags memories_flags() const noexcept { return vptr_.memories_flags_(C::get_this()); }
+			default_memory_flags memory_flags() const noexcept { return vptr.memory_flags_(C::get_this()); }
+			default_memory_flags memories_flags() const noexcept { return vptr.memories_flags_(C::get_this()); }
 
-			memory_resource vptr_;
+			memory_resource vptr;
 		};
 
 #if defined(VK_KHR_get_memory_requirements2)

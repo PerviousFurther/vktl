@@ -96,13 +96,13 @@ namespace vktl::detail {
     };
 
 
-	template<size_t index = 0u>
-	constexpr sampler_bundles_<index> sampler_bundles{};
+    template<size_t index = 0u>
+    constexpr sampler_bundles_<index> sampler_bundles{};
 
-	template<typename N>
-	struct m<sampler, N> : N {
-		m(sampler s, auto&&...others) 
-			: N{forward_(others)...} 
+    template<typename N>
+    struct m<sampler, N> : N {
+        m(sampler s, auto&&...others) 
+            : N{forward_(others)...} 
             , info{sampler_bundles<>[s.id]} 
         {}
 
@@ -124,18 +124,18 @@ namespace vktl::detail {
             }
         }
 
-		locked<VK_ VkSampler> handle() const noexcept { return { handle_, lock_of(this) }; }
+        locked<VK_ VkSampler> handle() const noexcept { return { handle_, lock_of(this) }; }
 
         void bind() {
 
         }
 
-	protected:
-		VK_ VkSamplerCreateInfo info;
+    protected:
+        VK_ VkSamplerCreateInfo info;
 
-	private:
-		reset_if_copy<VK_ VkSampler> handle_;
+    private:
+        reset_if_copy<VK_ VkSampler> handle_;
         // vector<bind_descriptor> descriptors_;
-	};
+    };
 
 }

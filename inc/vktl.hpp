@@ -1,7 +1,5 @@
 #pragma once
 
-
-
 #if defined(VKTL_EXPORT_MODULE)
 #	define VKTL_EXPORT_ export 
 #else
@@ -158,9 +156,7 @@ VKTL_EXPORT_ namespace vktl {
 #include "detail/device.hpp"
 #include "detail/compiler.hpp"
 #include "detail/pass.hpp"
-#include "detail/fence.hpp"
-#include "detail/event.hpp"
-#include "detail/semaphore.hpp"
+#include "detail/sync.hpp"
 #if VKTL_HAVE_WINDOW
 # include "detail/swapchain.hpp"
 #endif

@@ -1,15 +1,10 @@
 #pragma once
 
-
-
 #if !defined(VKTL_NO_COMPILER)
 
-
 namespace VK_NAMESPACE {
-#define SPIRV_REFLECT_DISABLE_CPP_BINDINGS
 #include <spirv-tools/libspirv.h>
 #include <glslang/Include/glslang_c_interface.h>
-#include "../../external/SPIRV-Reflect/spirv_reflect.h"
 }
 
 #if VKTL_HAVE_STD_
@@ -228,9 +223,6 @@ VKTL_EXPORT_ namespace vktl::detail {
 				if (shader.compiled.empty()) {
 					compile_shader_(shader);
 				}
-				if (shader.bindings.empty()) {
-					reflect_shader_(shader);
-				}
 
 				func(shader);
 				shader.shader_handle_tag::compiled = byte_view{
@@ -397,145 +389,6 @@ VKTL_EXPORT_ namespace vktl::detail {
 			shader.compiled.assign(spirv_ptr, spirv_ptr + word_count);
 		}
 
-		static void reflect_shader_(default_shader& shader) {
-			VK_ SpvReflectShaderModule spv_module;
-			VK_ SpvReflectResult reflect_res = VK_ spvReflectCreateShaderModule(
-				shader.compiled.size() * sizeof(uint32_t),
-				shader.compiled.data(),
-				&spv_module
-			);
-			if (reflect_res != VK_ SPV_REFLECT_RESULT_SUCCESS) {
-				throw error{ reflect_res, "[SPIRV-Reflect] Failed to create module." };
-			}
-			defer reflect_guard{ [&]() { VK_ spvReflectDestroyShaderModule(&spv_module); } };
-
-			uint32_t set_count = 0;
-			VK_ spvReflectEnumerateDescriptorSets(&spv_module, &set_count, nullptr);
-			vector<VK_ SpvReflectDescriptorSet*> reflect_sets(set_count);
-			VK_ spvReflectEnumerateDescriptorSets(&spv_module, &set_count, reflect_sets.data());
-
-			shader.bindings.clear();
-			for (const auto* set : reflect_sets) {
-				if (set->set >= shader.bindings.size()) {
-					shader.bindings.resize(set->set + 1);
-				}
-				for (uint32_t i = 0; i < set->binding_count; ++i) {
-					const auto* b = set->bindings[i];
-					VK_ VkDescriptorSetLayoutBinding binding{};
-					binding.binding = b->binding;
-					binding.descriptorType = static_cast<VK_ VkDescriptorType>(b->descriptor_type);
-					binding.descriptorCount = b->count;
-					binding.stageFlags = shader.stage;
-					binding.pImmutableSamplers = nullptr;
-
-					shader.bindings[set->set].push_back(binding);
-				}
-			}
-
-			uint32_t pc_count = 0;
-			VK_ spvReflectEnumeratePushConstantBlocks(&spv_module, &pc_count, nullptr);
-			vector<VK_ SpvReflectBlockVariable*> pc_blocks(pc_count);
-			VK_ spvReflectEnumeratePushConstantBlocks(&spv_module, &pc_count, pc_blocks.data());
-
-			shader.push_constants.clear();
-			for (const auto* pc : pc_blocks) {
-				VK_ VkPushConstantRange range{};
-				range.stageFlags = shader.stage;
-				range.offset = pc->offset;
-				range.size = pc->size;
-				shader.push_constants.push_back(range);
-			}
-
-			switch (shader.stage) {
-				case VK_ VK_SHADER_STAGE_VERTEX_BIT : {
-					auto& vert_shader = static_cast<default_vertex_shader&>(shader);
-					if (vert_shader.locations.empty()) {
-						uint32_t input_count = 0;
-						VK_ spvReflectEnumerateInputVariables(&spv_module, &input_count, nullptr);
-						vector<SpvReflectInterfaceVariable*> input_vars(input_count);
-						VK_ spvReflectEnumerateInputVariables(&spv_module, &input_count, input_vars.data());
-
-						for (const auto* input_var : input_vars) {
-							if (input_var->decoration_flags & SPV_REFLECT_DECORATION_BUILT_IN) continue;
-
-							VK_ VkVertexInputAttributeDescription attr{};
-							attr.location = input_var->location;
-							attr.binding = 0;
-							attr.format = static_cast<VK_ VkFormat>(input_var->format);
-							attr.offset = 0;
-
-							vert_shader.locations.push_back(attr);
-						}
-					}
-				} break;
-
-				case VK_ VK_SHADER_STAGE_FRAGMENT_BIT : {
-					// auto& frag_shader = static_cast<default_fragment_shader&>(shader);
-					// uint32_t output_count = 0;
-					// VK_ spvReflectEnumerateOutputVariables(&spv_module, &output_count, nullptr);
-					// vector<VK_ SpvReflectInterfaceVariable*> output_vars(output_count);
-					// VK_ spvReflectEnumerateOutputVariables(&spv_module, &output_count, output_vars.data());
-
-					// frag_shader.blend_attachments.clear();
-					// for (const auto* out_var : output_vars) {
-					// 	if (out_var->decoration_flags & VK_ SPV_REFLECT_DECORATION_BUILT_IN) continue;
-					// 
-					// 	blend.colorWriteMask = VK_ VK_COLOR_COMPONENT_R_BIT | VK_ VK_COLOR_COMPONENT_G_BIT |
-					// 		VK_ VK_COLOR_COMPONENT_B_BIT | VK_ VK_COLOR_COMPONENT_A_BIT;
-					// 	blend.blendEnable = VK_FALSE;
-					// 	frag_shader.blend_attachments.push_back(blend);
-					// }
-				} break;
-
-				case VK_ VK_SHADER_STAGE_COMPUTE_BIT : {
-					auto& comp_shader = static_cast<default_compute_shader&>(shader);
-					if (spv_module.entry_point_count > 0) {
-						comp_shader.x = spv_module.entry_points[0].local_size.x;
-						comp_shader.y = spv_module.entry_points[0].local_size.y;
-						comp_shader.z = spv_module.entry_points[0].local_size.z;
-					}
-				} break;
-
-				case VK_ VK_SHADER_STAGE_GEOMETRY_BIT : {
-					// auto& geom_shader = static_cast<default_geometry_shader&>(shader);
-					
-					// if (spv_module.entry_point_count > 0) {
-					// 	geom_shader.invocations = spv_module.entry_points[0].geometry.invocations;
-					// 	geom_shader.max_output_vertices = spv_module.entry_points[0].geometry.vertices;
-					// }
-				} break;
-
-				case VK_ VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT : {
-					// auto& tess_ctrl = static_cast<default_tess_control_shader&>(shader);
-					// if (spv_module.entry_point_count > 0) {
-					// 	tess_ctrl.patch_control_points = spv_module.entry_points[0].tessellation.output_vertices;
-					// }
-				} break;
-
-				case VK_ VK_SHADER_STAGE_TASK_BIT_EXT : {
-					// auto& task_shader = static_cast<default_task_shader&>(shader);
-					// if (spv_module.entry_point_count > 0) {
-					// 	task_shader.x = spv_module.entry_points[0].local_size.x;
-					// 	task_shader.y = spv_module.entry_points[0].local_size.y;
-					// 	task_shader.z = spv_module.entry_points[0].local_size.z;
-					// }
-				} break;
-
-				case VK_ VK_SHADER_STAGE_MESH_BIT_EXT : {
-					// auto& mesh_shader = static_cast<default_mesh_shader&>(shader);
-					// if (spv_module.entry_point_count > 0) {
-					// 	mesh_shader.x = spv_module.entry_points[0].local_size.x;
-					// 	mesh_shader.y = spv_module.entry_points[0].local_size.y;
-					// 	mesh_shader.z = spv_module.entry_points[0].local_size.z;
-					// 	mesh_shader.max_vertices = spv_module.entry_points[0].mesh.max_vertices;
-					// 	mesh_shader.max_primitives = spv_module.entry_points[0].mesh.max_primitives;
-					// }
-				} break;
-
-				default: break;
-			}
-		}
-
 		static constexpr VK_ glslang_stage_t to_glslang_stage(VK_ VkShaderStageFlagBits stage) {
 			switch (stage) {
 				case VK_ VK_SHADER_STAGE_VERTEX_BIT : return VK_ GLSLANG_STAGE_VERTEX;
@@ -638,24 +491,6 @@ VKTL_EXPORT_ namespace vktl::detail {
 		optimize params_;
 	};
 
-	// template<uint32_t Major, uint32_t Minor, typename N>
-	// struct m<vulkan_version<Major, Minor>, N> : N {
-	// 	m(vulkan_version<Major, Minor>, auto&&...others) : N{ forward_(others)... } {
-	// 		if constexpr (Major == 1 && Minor == 1) {
-	// 			N::input.client_version = VK_ GLSLANG_TARGET_VULKAN_1_1;
-	// 			N::input.target_language_version = VK_ GLSLANG_TARGET_SPV_1_3;
-	// 		}
-	// 		else if constexpr (Major == 1 && Minor == 2) {
-	// 			N::input.client_version = VK_ GLSLANG_TARGET_VULKAN_1_2;
-	// 			N::input.target_language_version = VK_ GLSLANG_TARGET_SPV_1_5;
-	// 		}
-	// 		else if constexpr (Major == 1 && Minor == 3) {
-	// 			N::input.client_version = VK_ GLSLANG_TARGET_VULKAN_1_3;
-	// 			N::input.target_language_version = VK_ GLSLANG_TARGET_SPV_1_6;
-	// 		}
-	// 	}
-	// };
-
 	template<typename N>
 	struct m<contain_debug_info_, N> : N {
 		m(contain_debug_info_, auto&&...others) : N{ forward_(others)... } {
@@ -721,72 +556,6 @@ VKTL_EXPORT_ namespace vktl::detail {
 		VK_ glsl_include_callbacks_t callback_{};
 	};
 
-	// template<typename N>
-	// struct m<defines, N> : N {
-	// 	using N::N;
-	// 
-	// 	void add_define(::std::string key, ::std::string value = "1") {
-	// 		defines_[::std::move(key)] = ::std::move(value);
-	// 	}
-	// 
-	// 	void init(::std::invocable<default_shader&> auto&& fn = compile::duck_invoker_) {
-	// 		if (!defines_.empty()) {
-	// 			::std::string preamble;
-	// 			for (const auto& [k, v] : defines_) {
-	// 				preamble += "#define " + k + " " + v + "\n";
-	// 			}
-	// 
-	// 			for (default_shader& shader : N::shaders_) {
-	// 				if (!shader.code.empty()) {
-	// 					::std::string code_str(reinterpret_cast<const char*>(shader.code.data()), shader.code.size());
-	// 					code_str = preamble + code_str;
-	// 					shader.code.assign(
-	// 						reinterpret_cast<const ::std::byte*>(code_str.data()),
-	// 						reinterpret_cast<const ::std::byte*>(code_str.data() + code_str.size())
-	// 					);
-	// 				}
-	// 			}
-	// 		}
-	// 
-	// 		N::init(forward_(fn));
-	// 	}
-	// 
-	// private:
-	// 	::std::unordered_map<::std::string, ::std::string> defines_;
-	// };
-
-	// template<typename N>
-	// struct m<disassembler, N> : N {
-	// 	using N::N;
-	// 
-	// 	::std::string disassemble(const default_shader& shader) {
-	// 		if (shader.compiled.empty()) return {};
-	// 
-	// 		VK_ spv_context context = VK_ spvContextCreate(VK_ SPV_ENV_VULKAN_1_0);
-	// 		defer _{ [&]() { VK_ spvContextDestroy(context); } };
-	// 
-	// 		VK_ spv_text text = nullptr;
-	// 		VK_ spv_diagnostic diagnostic = nullptr;
-	// 
-	// 		VK_ spv_result_t result = VK_ spvBinaryToText(
-	// 			context,
-	// 			shader.compiled.data(),
-	// 			shader.compiled.size(),
-	// 			SPV_BINARY_TO_TEXT_OPTION_INDENT | SPV_BINARY_TO_TEXT_OPTION_FRIENDLY_NAMES,
-	// 			&text,
-	// 			&diagnostic
-	// 		);
-	// 
-	// 		if (result != VK_ SPV_SUCCESS || !text) {
-	// 			if (diagnostic) VK_ spvDiagnosticDestroy(diagnostic);
-	// 			return {};
-	// 		}
-	// 
-	// 		::std::string disasm_str(text->str, text->length);
-	// 		VK_ spvTextDestroy(text);
-	// 		return disasm_str;
-	// 	}
-	// };
 }
 
 #endif

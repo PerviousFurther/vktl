@@ -44,7 +44,12 @@ endif()
 if(BUILD_TESTING)
     add_executable(execution_plan_tests test/execution_plan.cpp)
     target_link_libraries(execution_plan_tests PRIVATE vktl)
+    target_compile_definitions(execution_plan_tests PRIVATE VKTL_NO_WINDOW)
     add_test(NAME execution_plan_tests COMMAND execution_plan_tests)
+
+    add_executable(pass_compile_tests test/pass_compile.cpp)
+    target_link_libraries(pass_compile_tests PRIVATE vktl)
+    add_test(NAME pass_compile_tests COMMAND pass_compile_tests)
 endif()
 
 option(BUILD_EXAMPLES "Build vktl example projects" ON)

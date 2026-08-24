@@ -11,6 +11,8 @@ VKTL_EXPORT_ namespace vktl::detail {
 	using vector = ::std::vector<T>;
 	template<typename T>
 	using list = ::std::list<T>;
+	template<typename T>
+	using deque = ::std::deque<T>;
 
 	template<typename Fn>
 	struct defer {
@@ -63,7 +65,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 		for (::std::size_t i = 0; i < sizeof...(Args); ++i) {
 			if (matches[i]) { return i; }
 		}
-		return static_cast<::std::size_t>(-1);
+		return invalid;
 	}
 
 	template <typename T, typename Tuple>
@@ -840,21 +842,21 @@ VKTL_EXPORT_ namespace vktl::detail {
 		}
 	} vkget{};
 
+	// return last, which pNext == nullptr.
 	struct vkconnect_ {
-		static constexpr auto impl(auto& first, auto& second, auto&...rest) {
+		static constexpr auto& impl(auto& first, auto& second, auto&...rest) {
 			first.pNext = &second;
-			impl(second, rest...);
+			return impl(second, rest...);
 		}
-		static constexpr auto impl(auto& first) {}
-		static constexpr auto impl() {}
+		static constexpr auto& impl(auto& first) { return first; }
 
-		constexpr void operator()(auto&...rest) const noexcept {
-			impl(rest...);
+		constexpr auto& operator()(auto&...rest) const noexcept {
+			return impl(rest...);
 		}
 		template<typename...Ts>
-		constexpr void operator()(::std::tuple<Ts...>& ts) const noexcept {
-			::std::apply(vkconnect_(), ts);
+		constexpr auto& operator()(::std::tuple<Ts...>& ts) const noexcept {
+			return::std::apply(vkconnect_(), ts);
 		}
 
-	} vkconnect{};
+	} vkconnect{}; 
 }

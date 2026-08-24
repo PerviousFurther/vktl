@@ -9,8 +9,8 @@
 // Resource-usage and binding-coordinate tags normally use `express` and stay
 // out of the inheritance chain. Use an `m<Tag, N>` component only when a tag
 // must retain independent state or behavior.
-// Command-pool policy is selected per command unit. `generation` is the
-// allocation default; transient and individual-reset are explicit policy tags
+// Command-pool policy is selected per command unit. `reset_pool` is the
+// default; transient and individual-reset are explicit policy tags
 // and must never be confused with command-buffer usage flags.
 // --------------------------------------------------------------------------
 
@@ -26,7 +26,7 @@ VKTL_EXPORT_ namespace vktl {
 VKTL_EXPORT_ namespace vktl::detail {
 	inline constexpr struct invalid_ {
 		template<::std::unsigned_integral T>
-		static constexpr T value = ~T(0);
+		static constexpr T value = T(-1);
 
 		template<::std::unsigned_integral T>
 		constexpr operator T() const noexcept { return value<T>; }
@@ -102,9 +102,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 	template<typename T>
 	using vfn = typename virtual_fn<T>::type;
 
-	template<typename>
-	struct object;
-	template<typename>
+	template<typename T>
 	struct share;
 	template<typename>
 	struct unique;
@@ -112,19 +110,22 @@ VKTL_EXPORT_ namespace vktl::detail {
 	// type at left usally at top of inheritance chain.
 	template<typename...VPtrs>
 	struct box : apply_compose<vptr_base, VPtrs...> {
+		template<typename...>
+		friend struct box;
+
 		using base = apply_compose<vptr_base, VPtrs...>;
 		constexpr box() noexcept = default;
 
 		template<typename T>
 		constexpr box(T* pthis) {
 			this->pthis = pthis;
-			rebind<T, base>();
+			rebind<T>();
 		}
 
 		template<typename T>
-		constexpr box(object<T>& self) {
-			this->pthis = &self;
-			rebind<object<T>, base>();
+		constexpr box(T& pthis) {
+			this->pthis = &pthis;
+			rebind<T>();
 		}
 
 		template<typename T>
@@ -143,30 +144,52 @@ VKTL_EXPORT_ namespace vktl::detail {
 			: base{ static_cast<base const&>(other) }
 			, add_ref_{ other.add_ref_ } 
 			, release_{ other.release_ } {
+			assert(!other.unique()); // unique box cannot copy.
 			this->pthis = other.pthis;
-
-			assert(forbidden());
-
 			if (add_ref_ && this->pthis) {
 				add_ref_(this->pthis);
 			}
 		}
 		constexpr box& operator=(box const& other) {
 			if (&other != this) {
-
-				assert(forbidden());
+				assert(!other.unique()); // unique box cannot copy assign.
 
 				reset();
 
 				add_ref_ = other.add_ref_;
 				release_ = other.release_;
 
-				assert(forbidden());
-
 				static_cast<base&>(*this) = other;
-				if (this->pthis == other.pthis && add_ref_) {
+				if (this->pthis && add_ref_) {
 					add_ref_(this->pthis);
 				}
+			}
+			return *this;
+		}
+
+		template<typename...OtherVPtrs>
+		constexpr box(box<OtherVPtrs...> const& other) {
+			assert(!other.unique()); // unique box cannot copy.
+			copy_vptrs<base>(static_cast<typename box<OtherVPtrs...>::base const&>(other));
+			this->pthis = other.pthis;
+			add_ref_ = other.add_ref_;
+			release_ = other.release_;
+			if (this->pthis && add_ref_) {
+				add_ref_(this->pthis);
+			}
+		}
+
+		template<typename...OtherVPtrs>
+		constexpr box& operator=(box<OtherVPtrs...> const& other) {
+			assert(!other.unique()); // unique box cannot copy.
+
+			reset();
+			copy_vptrs<base>(static_cast<typename box<OtherVPtrs...>::base const&>(other));
+			this->pthis = other.pthis;
+			add_ref_ = other.add_ref_;
+			release_ = other.release_;
+			if (this->pthis && add_ref_) {
+				add_ref_(this->pthis);
 			}
 			return *this;
 		}
@@ -189,6 +212,24 @@ VKTL_EXPORT_ namespace vktl::detail {
 			return *this;
 		}
 
+		template<typename...OtherVPtrs>
+		constexpr box(box<OtherVPtrs...>&& other) noexcept {
+			copy_vptrs<base>(static_cast<typename box<OtherVPtrs...>::base const&>(other));
+			this->pthis = ::std::exchange(other.pthis, nullptr);
+			add_ref_ = ::std::exchange(other.add_ref_, nullptr);
+			release_ = ::std::exchange(other.release_, nullptr);
+		}
+
+		template<typename...OtherVPtrs>
+		constexpr box& operator=(box<OtherVPtrs...>&& other) noexcept {
+			reset();
+			copy_vptrs<base>(static_cast<typename box<OtherVPtrs...>::base const&>(other));
+			this->pthis = ::std::exchange(other.pthis, nullptr);
+			add_ref_ = ::std::exchange(other.add_ref_, nullptr);
+			release_ = ::std::exchange(other.release_, nullptr);
+			return *this;
+		}
+
 		~box() { reset(); }
 
 		constexpr bool shared() const noexcept { return add_ref_; }
@@ -198,8 +239,10 @@ VKTL_EXPORT_ namespace vktl::detail {
 		constexpr bool empty() const noexcept { return !this->pthis; }
 
 		constexpr void reset() noexcept {
-			if (release_) { ::std::exchange(release_, nullptr)(::std::exchange(this->pthis, nullptr)); }
+			auto* pthis = ::std::exchange(this->pthis, nullptr);
+			auto release = ::std::exchange(release_, nullptr);
 			add_ref_ = nullptr;
+			if (release && pthis) { release(pthis); }
 		}
 
 		constexpr void* get() const noexcept { return this->pthis; }
@@ -212,20 +255,44 @@ VKTL_EXPORT_ namespace vktl::detail {
 		template<typename T>
 		constexpr void rebind() {
 			rebind<T, base>();
-			if constexpr (requires (T & v) {
+			constexpr bool share = requires { typename T::shared_tag; };
+			constexpr bool unique = requires { typename T::unique_tag; };
+			static_assert(!(share && unique), "a box target cannot be both shared and unique"); // test.
+
+			if constexpr (share) {
+				static_assert(requires (T & v) {
 				{ v.add_ref() } -> ::std::same_as<uint32_t>;
 				{ v.release() } -> ::std::same_as<uint32_t>;
-			}) {
+				}, "shared_tag requires uint32_t add_ref() and release()");
 				add_ref_ = [](void* ptr) -> uint32_t { return static_cast<T*>(ptr)->add_ref(); };
 				release_ = [](void* ptr) -> uint32_t { return static_cast<T*>(ptr)->release(); };
 			}
-			else {
+			else if constexpr (unique) {
 				release_ = [](void* ptr) -> uint32_t { delete static_cast<T*>(ptr); return 0u; };
 			}
 		}
 
 	private:
-		constexpr bool forbidden() const noexcept { return !(bool(add_ref_) ^ bool(release_)); }
+		template<typename N, typename O>
+		static constexpr void copy_vptr(N& target, O const& source) {
+			if constexpr (!::std::same_as<O, vptr_base>) {
+				if constexpr (requires { target.vptr = source.vptr; }) {
+					target.vptr = source.vptr;
+				}
+				else {
+					copy_vptr(target, static_cast<typename O::base const&>(source));
+				}
+			}
+		}
+
+		template<typename N, typename O>
+		constexpr void copy_vptrs(O const& source) {
+			if constexpr (!::std::same_as<N, vptr_base>) {
+				auto& target = static_cast<N&>(*this);
+				copy_vptr(target, source);
+				copy_vptrs<typename N::base>(source);
+			}
+		}
 
 		template<typename T, typename N>
 		constexpr void rebind() {
@@ -236,6 +303,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 		}
 
 	private:
+		using base::vptr;
 		vfn<uint32_t()> add_ref_ = nullptr;
 		vfn<uint32_t()> release_ = nullptr;
 	};
@@ -360,7 +428,7 @@ VKTL_EXPORT_ namespace vktl::vptr {
 			free_ = [](void* ptr, void* p) { static_cast<T*>(ptr)->free(p); };
 		}
 
-		handle_allocator vptr_;
+		handle_allocator vptr;
 	};
 
 	struct debug_callback {
@@ -375,14 +443,14 @@ VKTL_EXPORT_ namespace vktl::vptr {
 
 		template<typename T>
 		void rebind() {
-			vptr_.messager_ = [](void* ptr, const char* message) {
+			vptr.messager_ = [](void* ptr, const char* message) {
 				static_cast<T*>(ptr)->send(message);
 			};
 		}
 
-		void send(const char* message) { vptr_.messager_(C::get_this(), message); }
+		void send(const char* message) { vptr.messager_(C::get_this(), message); }
 
-		debug_callback vptr_;
+		debug_callback vptr;
 	};
 
 }
@@ -471,6 +539,10 @@ VKTL_EXPORT_ namespace vktl {
 		inline constexpr type graphics = 0x1 << 2;
 		inline constexpr type present = 0x1 << 3;
 		inline constexpr type bind_sparse = 0x1 << 4;
+
+		// inline constexpr type generic = queue_duty::graphics | queue_duty::compute | queue_duty::transfer;
+		// inline constexpr type compute = queue_duty::compute | queue_duty::transfer;
+		// inline constexpr type compute = queue_duty::graphics | queue_duty::compute | queue_duty::transfer;
 	}
 
 	namespace device_extensions {
@@ -535,20 +607,15 @@ VKTL_EXPORT_ namespace vktl {
 
 	namespace queue_extensions {
 		using extensions::debug_named;
-		inline constexpr struct graphics_ {} graphics{};
-		inline constexpr struct compute_ {} compute {};
-		inline constexpr struct transfer_ {} transfer{};
-		inline constexpr struct present_ {} present;
-		inline constexpr struct bind_sparse_ {} bind_sparse;
-
-		struct priority { // not queue-family-global-priorities.
+		// local priority in family.
+		struct priority {
 			float value;
 		};
 	}
-	struct queue {
-		uint16_t family = 0u;
-		uint16_t index = 0u;
-	};
+	inline constexpr struct queue_ {
+		uint32_t family = 0u;
+	} queue{}; // since family 0 is always most generic.
+
 
 	namespace task_extensions {
 		using extensions::debug_named;
@@ -556,18 +623,6 @@ VKTL_EXPORT_ namespace vktl {
 		inline constexpr struct reset_pool_ {} reset_pool {};
 		inline constexpr struct reset_command_buffer_ {} reset_command_buffer {};
 		inline constexpr struct free_command_buffer_ {} free_command_buffer {};
-	}
-
-	enum class command_pool_policy_kind : uint8_t {
-		generation,
-		transient,
-		reset_command_buffer,
-		free_command_buffer,
-	};
-
-	namespace command_pool_extensions {
-		inline constexpr struct transient_ {} transient {};
-		inline constexpr struct individual_reset_ {} individual_reset {};
 	}
 	template<typename Fn>
 	struct task { Fn func; };

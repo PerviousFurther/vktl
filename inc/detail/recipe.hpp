@@ -3,61 +3,20 @@
 // --- Agents specification -------------------------------------------------
 // Every runtime recipe is one independently owned `object` inheritance chain
 // stored in a command unit's `poly_list`. `compiled_recipe` owns only the
-// record trampoline and fingerprint; recipe components retain their own data.
+// record trampoline; recipe components retain their own data.
 // This header must not depend on the task component or task compiled state.
-// Recipe fingerprints describe recorded command content and explicit
-// revisions; they are never generated from a refresh counter.
 // --------------------------------------------------------------------------
 
 VKTL_EXPORT_ namespace vktl::detail {
 
-	inline constexpr uint64_t recipe_hash_basis = FNV_bias;
-	inline constexpr uint64_t recipe_hash_prime = 1099511628211ull;
-
-	inline constexpr uint64_t recipe_hash_bytes(
-		uint64_t hash, void const* data, size_t size) noexcept {
-		auto const* bytes = static_cast<::std::byte const*>(data);
-		for (size_t index = 0u; index < size; ++index) {
-			hash ^= uint64_t(bytes[index]);
-			hash *= recipe_hash_prime;
-		}
-		return hash;
-	}
-
-	template<typename T>
-	uint64_t recipe_hash_value(uint64_t hash, T const& value) noexcept
-		requires(::std::is_trivially_copyable_v<T>) {
-		return recipe_hash_bytes(hash, ::std::addressof(value), sizeof(T));
-	}
-
-	inline uint64_t recipe_hash_pointer(uint64_t hash, void const* value) noexcept {
-		auto pointer = reinterpret_cast<::std::uintptr_t>(value);
-		return recipe_hash_value(hash, pointer);
-	}
-
-	inline uint64_t allocate_recipe_type_key() noexcept {
-		static ::std::atomic<uint64_t> next{ 1u };
-		return next.fetch_add(1u, ::std::memory_order_relaxed);
-	}
-
-	template<typename T>
-	inline uint64_t const recipe_type_key_v = allocate_recipe_type_key();
-
-	template<typename T>
-	uint64_t recipe_hash_type(uint64_t hash) noexcept {
-		return recipe_hash_value(hash, recipe_type_key_v<T>);
-	}
-
 	struct frame_selection {
-		span<box<vptr::frame_related> const> scopes;
-		span<uint32_t const> frames;
+		box<vptr::frame_related> const* scope = nullptr;
+		uint32_t selected = 0u;
 
-		uint32_t frame(frame_scope_id scope) const noexcept {
-			for (uint32_t index = 0u; index < uint32_t(scopes.size()); ++index) {
-				if (scopes[index].frame_scope_identity() == scope) return frames[index];
-			}
-			assert(!"requested frame scope is not a command dependency");
-			return 0u;
+		uint32_t frame(frame_scope_id identity) const noexcept {
+			assert(scope && scope->frame_scope_identity() == identity
+				&& "requested frame scope is not the command dependency");
+			return selected;
 		}
 	};
 
@@ -74,8 +33,6 @@ VKTL_EXPORT_ namespace vktl::detail {
 			record_(*this, context);
 		}
 
-		uint64_t fingerprint() const noexcept { return fingerprint_; }
-
 	protected:
 		template<typename T>
 		void bind_record() noexcept {
@@ -88,7 +45,6 @@ VKTL_EXPORT_ namespace vktl::detail {
 		void record_chain(command_record_context const&) const noexcept {}
 
 		record_fn record_ = nullptr;
-		uint64_t fingerprint_ = recipe_hash_basis;
 	};
 
 	template<typename T>
@@ -104,7 +60,6 @@ VKTL_EXPORT_ namespace vktl::detail {
 	template<typename Fn>
 	struct callable_recipe {
 		Fn function;
-		uint64_t revision = 0u;
 	};
 
 	struct draw_recipe {
@@ -172,8 +127,6 @@ VKTL_EXPORT_ namespace vktl::detail {
 		constexpr m(Info&& info, auto&&... others)
 			: N{ forward_(others)... }, info_{ forward_(info) } {
 			this->template bind_record<m>();
-			this->fingerprint_ = recipe_hash_type<callable_recipe<Fn>>(this->fingerprint_);
-			this->fingerprint_ = recipe_hash_value(this->fingerprint_, info_.revision);
 		}
 
 		void record_chain(command_record_context const& context) const {
@@ -199,10 +152,6 @@ VKTL_EXPORT_ namespace vktl::detail {
 		constexpr m(draw_recipe info, auto&&... others)
 			: N{ forward_(others)... }, info_{ info } {
 			this->template bind_record<m>();
-			this->fingerprint_ = recipe_hash_value(this->fingerprint_, info_.vertices);
-			this->fingerprint_ = recipe_hash_value(this->fingerprint_, info_.instances);
-			this->fingerprint_ = recipe_hash_value(this->fingerprint_, info_.first_vertex);
-			this->fingerprint_ = recipe_hash_value(this->fingerprint_, info_.first_instance);
 		}
 
 		void record_chain(command_record_context const& context) const {
@@ -219,9 +168,6 @@ VKTL_EXPORT_ namespace vktl::detail {
 		constexpr m(dispatch_recipe info, auto&&... others)
 			: N{ forward_(others)... }, info_{ info } {
 			this->template bind_record<m>();
-			this->fingerprint_ = recipe_hash_value(this->fingerprint_, info_.x);
-			this->fingerprint_ = recipe_hash_value(this->fingerprint_, info_.y);
-			this->fingerprint_ = recipe_hash_value(this->fingerprint_, info_.z);
 		}
 
 		void record_chain(command_record_context const& context) const {
@@ -237,9 +183,6 @@ VKTL_EXPORT_ namespace vktl::detail {
 		constexpr m(bind_pipeline_recipe<Pass> info, auto&&... others)
 			: N{ forward_(others)... }, info_{ info } {
 			this->template bind_record<m>();
-			this->fingerprint_ = recipe_hash_pointer(this->fingerprint_, info_.pass);
-			this->fingerprint_ = recipe_hash_value(this->fingerprint_, info_.index);
-			this->fingerprint_ = recipe_hash_value(this->fingerprint_, info_.bind_point);
 		}
 
 		void record_chain(command_record_context const& context) const {
@@ -257,10 +200,6 @@ VKTL_EXPORT_ namespace vktl::detail {
 		constexpr m(bind_descriptor_recipe<BindSet> info, auto&&... others)
 			: N{ forward_(others)... }, info_{ info } {
 			this->template bind_record<m>();
-			this->fingerprint_ = recipe_hash_pointer(this->fingerprint_, info_.bind_set);
-			this->fingerprint_ = recipe_hash_value(this->fingerprint_, info_.bind_point);
-			this->fingerprint_ = recipe_hash_value(this->fingerprint_, info_.layout);
-			this->fingerprint_ = recipe_hash_value(this->fingerprint_, info_.set);
 		}
 
 		void record_chain(command_record_context const& context) const {
@@ -281,9 +220,6 @@ VKTL_EXPORT_ namespace vktl::detail {
 		constexpr m(bind_vertex_recipe<Buffer> info, auto&&... others)
 			: N{ forward_(others)... }, info_{ info } {
 			this->template bind_record<m>();
-			this->fingerprint_ = recipe_hash_pointer(this->fingerprint_, info_.buffer);
-			this->fingerprint_ = recipe_hash_value(this->fingerprint_, info_.binding);
-			this->fingerprint_ = recipe_hash_value(this->fingerprint_, info_.offset);
 		}
 
 		void record_chain(command_record_context const& context) const {
@@ -304,9 +240,6 @@ VKTL_EXPORT_ namespace vktl::detail {
 		constexpr m(bind_index_recipe<Buffer> info, auto&&... others)
 			: N{ forward_(others)... }, info_{ info } {
 			this->template bind_record<m>();
-			this->fingerprint_ = recipe_hash_pointer(this->fingerprint_, info_.buffer);
-			this->fingerprint_ = recipe_hash_value(this->fingerprint_, info_.offset);
-			this->fingerprint_ = recipe_hash_value(this->fingerprint_, info_.type);
 		}
 
 		void record_chain(command_record_context const& context) const {

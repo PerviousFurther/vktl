@@ -19,14 +19,14 @@ VKTL_EXPORT_ namespace vktl::detail {
 			node& operator=(node&&) noexcept = delete;
 
 			template<::std::derived_from<node> T >
-			auto& as() const noexcept { return *static_cast<const T*>(this); }
+			constexpr auto& as() const noexcept { return *static_cast<const T*>(this); }
 			template<::std::derived_from<node> T>
-			auto& as() noexcept { return *static_cast<T*>(this); }
+			constexpr auto& as() noexcept { return *static_cast<T*>(this); }
 
 			template<::std::derived_from<node> T>
-			operator T& () noexcept { return as<T>(); }
+			constexpr operator T& () noexcept { return as<T>(); }
 			template<::std::derived_from<node> T>
-			operator T const& () const noexcept { return as<T>(); }
+			constexpr operator T const& () const noexcept { return as<T>(); }
 
 		private:
 			void(*deleter)(node const*) noexcept = nullptr;
@@ -464,6 +464,14 @@ VKTL_EXPORT_ namespace vktl::detail {
 	template<typename... Us>
 	spans(const vectors<Us...>&) -> spans<const Us...>;
 
+	inline constexpr struct by_default_ {
+		template<typename T>
+		constexpr operator T() const 
+			noexcept(::std::is_nothrow_default_constructible_v<T>) 
+			requires(::std::is_default_constructible_v<T>) {
+			return T{};
+		}
+	} by_default{};
 	template<typename...Ts>
 	struct vectors {
 		static_assert(sizeof...(Ts) > 0, "Vectors requires at least one type.");
@@ -477,12 +485,13 @@ VKTL_EXPORT_ namespace vktl::detail {
 		using const_view_type = spans<Ts const...>;
 		using iterator = iterators<Ts...>;
 		using const_iterator = iterators<Ts const...>;
+		static constexpr size_type num_types = sizeof...(Ts);
 
 		constexpr vectors() = default;
 		explicit vectors(size_type size) 
 			requires((::std::default_initializable<Ts> && ...)) { resize(size); }
 		template<typename... Args>
-			requires(sizeof...(Args) == sizeof...(Ts) && (::std::constructible_from<Ts, const Args&> && ...))
+			requires(can_emplace<const Args&...>())
 		explicit vectors(size_type size, Args const&...values) { resize(size, values...); }
 
 		~vectors() { clear(); this->deallocate_buffer(); }
@@ -542,11 +551,12 @@ VKTL_EXPORT_ namespace vktl::detail {
 		}
 
 		void reserve(size_type new_cap) { if (new_cap > capacity_) reallocate(new_cap); }
+		void shrink_to_fit() { if (size_ < capacity_) reallocate(size_); }
 
 		template<typename... Args>
-			requires(sizeof...(Args) == sizeof...(Ts) && (::std::constructible_from<Ts, Args&&> && ...))
-		void emplace_back(Args&&... args) { emplace(end(), static_cast<Args&&>(args)...); }
-		void push_back(const Ts&... args) requires((::std::copy_constructible<Ts> && ...)) { emplace_back(args...); }
+			requires(can_emplace<Args...>())
+		auto& emplace_back(Args&&...args) { return *emplace(end(), static_cast<Args&&>(args)...); }
+		void push_back(const Ts&...args) requires((::std::copy_constructible<Ts> && ...)) { emplace_back(args...); }
 		void push_back(Ts&&... args) requires((::std::move_constructible<Ts> && ...)) { emplace_back(::std::move(args)...); }
 		void pop_back() noexcept { assert(!empty()); destroy_row(--size_); }
 
@@ -556,7 +566,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 			while (size_ < new_size) { construct_default_row(size_++); }
 		}
 		template<typename... Args>
-			requires(sizeof...(Args) == sizeof...(Ts) && (::std::constructible_from<Ts, const Args&> && ...))
+			requires(can_emplace<const Args&...>())
 		void resize(size_type new_size, const Args&... values) {
 			if (new_size < size_) { shrink_to(new_size); return; }
 			reserve(new_size);
@@ -565,17 +575,14 @@ VKTL_EXPORT_ namespace vktl::detail {
 		void clear() noexcept { shrink_to(0); }
 
 		template<typename... Args>
-			requires(sizeof...(Args) == sizeof...(Ts) && (::std::constructible_from<Ts, Args&&> && ...))
-		iterator emplace(const_iterator where, Args&&... args) {
-			const auto pos = checked_index(where, true);
-			if (size_ == capacity_) { emplace_reallocating(pos, ::std::forward<Args>(args)...); }
-			else { emplace_in_place(pos, ::std::forward<Args>(args)...); }
-			return begin() + static_cast<::std::ptrdiff_t>(pos);
+			requires(can_emplace<Args...>())
+		auto& emplace(const_iterator where, Args&&...args) {
+			return *emplace_it(where, static_cast<Args&&>(args)...);
 		}
-		iterator insert(const_iterator where, const Ts&... args)
-			requires((::std::copy_constructible<Ts> && ...)) { return emplace(where, args...); }
+		iterator insert(const_iterator where, Ts const&...args)
+			requires((::std::copy_constructible<Ts> && ...)) { return emplace_it(where, args...); }
 		iterator insert(const_iterator where, Ts&&... args)
-			requires((::std::move_constructible<Ts> && ...)) { return emplace(where, ::std::move(args)...); }
+			requires((::std::move_constructible<Ts> && ...)) { return emplace_it(where, ::std::move(args)...); }
 
 		iterator erase(const_iterator where) {
 			const auto pos = checked_index(where, false);
@@ -585,9 +592,51 @@ VKTL_EXPORT_ namespace vktl::detail {
 		}
 
 	private:
-		static constexpr size_type num_types = sizeof...(Ts);
 		static constexpr size_type max_alignment = ::std::max({ alignof(Ts)... });
 		static constexpr::std::index_sequence_for<Ts...> indices{};
+
+		template<typename... Args>
+			requires(can_emplace<Args...>())
+		iterator emplace_it(const_iterator where, Args&&...args) {
+			const auto pos = checked_index(where, true);
+			if (size_ == capacity_) { emplace_reallocating(pos, ::std::forward<Args>(args)...); }
+			else { emplace_in_place(pos, ::std::forward<Args>(args)...); }
+			return begin() + static_cast<::std::ptrdiff_t>(pos);
+		}
+
+		template<typename... Args>
+		static consteval bool can_emplace() {
+			if constexpr (sizeof...(Args) > num_types) {
+				return false;
+			}
+			else {
+				using args_type = ::std::tuple<Args&&...>;
+				constexpr bool provided = []<size_type... Is>(::std::index_sequence<Is...>) {
+					return (can_initialize<tuple_at_t<Is, types>, ::std::tuple_element_t<Is, args_type>>() && ...);
+				}(::std::index_sequence_for<Args...>{});
+				constexpr bool omitted = []<size_type... Is>(::std::index_sequence<Is...>) {
+					return (::std::default_initializable<tuple_at_t<sizeof...(Args) + Is, types>> && ...);
+				}(::std::make_index_sequence<num_types - sizeof...(Args)>{});
+				return provided && omitted;
+			}
+		}
+		template<typename T, typename Arg>
+		static consteval bool can_initialize() {
+			if constexpr (::std::same_as<::std::remove_cvref_t<Arg>, by_default>) {
+				return ::std::default_initializable<T>;
+			}
+			else {
+				return ::std::constructible_from<T, Arg>;
+			}
+		}
+		template<typename... Args>
+		static auto complete_row_args(Args&&... args) {
+			return [&]<size_type... Is>(::std::index_sequence<Is...>) {
+				return ::std::tuple_cat(
+					::std::forward_as_tuple(::std::forward<Args>(args)...),
+					::std::tuple{ ((void)Is, by_default)... });
+			}(::std::make_index_sequence<num_types - sizeof...(Args)>{});
+		}
 
 		// one offsets computation, all N column pointers; covers uninitialised slots
 		view_type raw_view() const noexcept {
@@ -624,14 +673,24 @@ VKTL_EXPORT_ namespace vktl::detail {
 			size_type constructed = 0;
 			try {
 				[&] <size_type... Is>(::std::index_sequence<Is...>) {
-					((::std::construct_at(v.template data<Is>() + index,
+					((construct_value(v.template data<Is>() + index,
 						::std::get<Is>(::std::forward<Tuple>(args))), ++constructed), ...);
 				}(indices);
 			}
 			catch (...) { destroy_row_prefix(v, index, constructed); throw; }
 		}
+		template<typename T, typename Arg>
+		static void construct_value(T* where, Arg&& arg) {
+			if constexpr (::std::same_as<::std::remove_cvref_t<Arg>, by_default>) {
+				::std::construct_at(where);
+			}
+			else {
+				::std::construct_at(where, ::std::forward<Arg>(arg));
+			}
+		}
 		template<typename... Args> void construct_row(size_type index, Args&&... args) {
-			construct_row_from(index, ::std::forward_as_tuple(::std::forward<Args>(args)...));
+			auto complete = complete_row_args(::std::forward<Args>(args)...);
+			construct_row_from(index, ::std::move(complete));
 		}
 		void construct_default_row(size_type index) {
 			const auto v = raw_view();
@@ -714,10 +773,19 @@ VKTL_EXPORT_ namespace vktl::detail {
 		}
 		template<typename... Args> void assign_row(size_type index, Args&&... args) {
 			const auto v = view();
-			auto tuple = ::std::forward_as_tuple(::std::forward<Args>(args)...);
+			auto tuple = complete_row_args(::std::forward<Args>(args)...);
 			[&] <size_type... Is>(::std::index_sequence<Is...>) {
-				((v.template get<Is>(index) = ::std::get<Is>(::std::move(tuple))), ...);
+				((assign_value(v.template get<Is>(index), ::std::get<Is>(::std::move(tuple)))), ...);
 			}(indices);
+		}
+		template<typename T, typename Arg>
+		static void assign_value(T& target, Arg&& arg) {
+			if constexpr (::std::same_as<::std::remove_cvref_t<Arg>, by_default>) {
+				target = T{};
+			}
+			else {
+				target = ::std::forward<Arg>(arg);
+			}
 		}
 
 		size_type capacity_after_insert() const noexcept {

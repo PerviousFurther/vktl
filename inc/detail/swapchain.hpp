@@ -12,7 +12,7 @@
 VKTL_EXPORT_ namespace vktl::detail {
 
 	template<>
-	struct is_queryable<swapchain, frame_scope> : ::std::true_type {};
+	struct is_queryable<swapchain, frame_source> : ::std::true_type {};
 
 	template<typename N>
 	struct m<swapchain, N> : N {

@@ -68,7 +68,7 @@ VKTL_EXPORT_ namespace vktl::vptr {
 
 		template<typename T>
 		constexpr void rebind() noexcept {
-			vptr_ = {
+			vptr = {
 				.info_ = [](void const* ptr) noexcept -> layout_t const& {
 					return static_cast<T const*>(ptr)->info();
 				},
@@ -76,10 +76,10 @@ VKTL_EXPORT_ namespace vktl::vptr {
 		}
 
 		layout_t const& info() const noexcept {
-			return vptr_.info_(C::get_this());
+			return vptr.info_(C::get_this());
 		}
 
-		descriptor_set vptr_;
+		descriptor_set vptr;
 	};
 }
 

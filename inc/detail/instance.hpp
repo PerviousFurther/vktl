@@ -18,10 +18,6 @@
 #endif
 
 VKTL_EXPORT_ namespace vktl::detail {
-	template<>
-	struct is_host<device> : ::std::true_type {};
-	template<>
-	struct is_host<instance> : ::std::true_type {};
 
 	using namespace instance_extensions;
 

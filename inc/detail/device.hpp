@@ -129,6 +129,17 @@ VKTL_EXPORT_ namespace vktl::detail {
 		}
 	};
 
+	namespace queues {
+		queue_duty::type to_duty(VK_ VkQueueFlags vk_flags) {
+			queue_duty::type result = queue_duty::none;
+			if (vk_flags & VK_QUEUE_COMPUTE_BIT)        result |= queue_duty::compute;
+			if (vk_flags & VK_QUEUE_TRANSFER_BIT)       result |= queue_duty::transfer;
+			if (vk_flags & VK_QUEUE_GRAPHICS_BIT)       result |= queue_duty::graphics;
+			if (vk_flags & VK_QUEUE_SPARSE_BINDING_BIT) result |= queue_duty::bind_sparse;
+			return result;
+		}
+	}
+
 	template<typename N>
 	struct basic_device : basic_extensions<N> {
 		using base = basic_extensions<N>;
@@ -149,56 +160,32 @@ VKTL_EXPORT_ namespace vktl::detail {
 			info.enabledLayerCount = 0u;
 			info.ppEnabledLayerNames = nullptr;
 
-			for (auto it = queues_.begin(); it != queues_.end(); ) {
-				auto itnx = it;
-				for (auto itn = it + 1; itn != queues_.end(); ) {
-					if (itn.get<0u>().queueFamilyIndex == it.get<0u>().queueFamilyIndex) {
-						auto& priorities = itn.get<1u>();
-						it.get<1u>().insert(it.get<1u>().end(), priorities.begin(), priorities.end());
-						it.get<0u>().queueCount += itn.get<0u>().queueCount;
-
-						auto idx = ::std::distance(queues_.begin(), it);
-						itn = queues_.erase(itn);
-						it = queues_.begin() + idx;
-					}
-					else {
-						if (itnx == it) { itnx = itn; }
-						itn++;
-					}
-				}
-				if (itnx != it) {
-					it = itnx;
-				}
-				else {
-					break;
-				}
+			for (auto& [queue, priorities] : queue_infos) {
+				queue.pQueuePriorities = priorities.data();
 			}
-			for (uint32_t index = 0u; index < uint32_t(queues_.size()); ++index) {
-				queues_.get<0u>(index).pQueuePriorities = queues_.get<1u>(index).data();
-			}
-			info.queueCreateInfoCount = uint32_t(queues_.size());
-			info.pQueueCreateInfos = queues_.data<0u>();
+			info.queueCreateInfoCount = uint32_t(queue_infos.size());
+			info.pQueueCreateInfos = queue_infos.data<0u>();
 		}
 
-		bool append_extensions(const char* layer, uint16_t disabled_minor = api::max_minor + 1u) {
-			assert(!handle_); return base::append_extensions(layer, disabled_minor);
+		bool append_extensions(const char* layer, uint16_t disabled_minor = api::max_minor + 1u, uint16_t enable_minor = 0u) {
+			assert(!handle_); // cannot append extensions after initialized.
+			assert(parent_of<instance>(this)->api_version_minor() >= enable_minor); // Specified minor not support specified extensions.
+			return base::append_extensions(layer, disabled_minor);
 		}
 
-		auto init() {
-			N::init();
-			auto locker = nullptr;
+		void init() {
 			if (!handle_) {
-				phydv_ = parent_of<instance>(this)->physical_device(device_index_);
-				VK_ vkCreateDevice(phydv_, &info, N::allocator(), &handle_) | popup{ "[Device] Create device failure." };
+				N::init();
+				if (!phydv_) phydv_ = parent_of<instance>(this)->physical_device(device_index_);
+				VK_ vkCreateDevice(phydv_, &info, N::allocator(), &handle_) 
+					| popup{ "[Device] Create device failure." };
 				(void)this->create(default_descriptor_set_layout{});
 			}
-			return locker;
 		}
 
-		auto reset() {
-			N::reset();
-			auto locker = nullptr;
+		void reset() {
 			if (handle_) {
+				N::reset();
 				for (auto const& [layout, _] : this->pipe_layouts_) {
 					VK_ vkDestroyPipelineLayout(handle_, layout, N::allocator());
 				}
@@ -209,7 +196,6 @@ VKTL_EXPORT_ namespace vktl::detail {
 				set_layouts_.clear();
 				VK_ vkDestroyDevice(::std::exchange(handle_.value, VK_NULL_HANDLE), N::allocator());
 			}
-			return locker;
 		}
 
 		auto handle() const noexcept { return handle_.value; }
@@ -217,6 +203,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 		VK_ VkDescriptorSetLayout create(default_descriptor_set_layout value) {
 			auto _ = locker_of(this);
+			if (!handle_) { init(); }
 			for (auto set_layout : set_layouts_) {
 				if (get<1>(set_layout) == value) {
 					return get<0>(set_layout);
@@ -294,9 +281,9 @@ VKTL_EXPORT_ namespace vktl::detail {
 			set_layouts_.emplace_back(layout, ::std::move(value));
 			return layout;
 		}
-
 		VK_ VkPipelineLayout create(default_pipeline_layout value) {
 			auto _ = locker_of(this);
+			if (!handle_) { init(); }
 			for (auto pipe_layout : pipe_layouts_) {
 				if (get<1>(pipe_layout) == value) {
 					return get<0>(pipe_layout);
@@ -320,37 +307,73 @@ VKTL_EXPORT_ namespace vktl::detail {
 			return result;
 		}
 
-		void append(queue info) {
+		friend constexpr auto& last_queue(basic_device& self) noexcept {
 			assert(!handle_); // append operation only enable when not initialized.
-			if (queues_.size() && get<0u>(queues_.back()).queueFamilyIndex == info.family) {
-				auto& last = get<0u>(queues_.back());
-				last.queueCount = (::std::max)(info.index + 1u, last.queueCount);
-				get<1u>(queues_.back()).resize(last.queueCount, 1.0f);
+			assert(self.queue_infos.size()); // are you forget to append queue at first?
+			return self.queue_infos.row(self.last_queue_set_);
+		}
+
+		friend constexpr void append(basic_device& self, queue_ info) {
+			assert(!self.handle_);
+			auto it = ::std::ranges::lower_bound(self.queue_infos, [&](auto const& value) { return info.family < value.queueFamilyIndex; });
+			if (it == self.queue_infos.end() || it->queueFamilyIndex != info.family) {
+				it = self.queue_infos.insert(it, 
+					VK_ VkDeviceQueueCreateInfo {
+						.sType = VK_ VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+						.queueFamilyIndex = info.family,
+						.queueCount = 1u,
+					}, vector{ 0.5f });
 			}
 			else {
-				queues_.emplace_back(VK_ VkDeviceQueueCreateInfo{
-					.sType = VK_ VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
-					.queueFamilyIndex = info.family,
-					.queueCount = info.index + 1u,
-				}, vector<float>(info.index + 1u, 1.0f));
+				it->queueCount++;
+			}
+			last_queue_set_ = uint16_t(::std::distance(self.queue_infos.begin(), it));
+		}
+
+		auto& queues() const noexcept { return queue_infos; }
+
+		// WARNING: if you using this function, then `instance` or `device group` will be initialized.
+		vector<queue_duty::type> queue_family_duties() const {
+			assert(!phydv_); // Only allow acquire once. // Cannot acquire family duties after initialization.
+			N::init();
+			phydv_ = parent_of<instance>(this)->physical_device(device_index_);
+			vector<VK_ VkQueueFamilyProperties> props;
+			vkget(props, VK_ vkGetPhysicalDeviceQueueFamilyProperties, phydv_);
+			return::std::ranges::transform(props, [&](auto& props) { return queues::to_duty(props.queueFlags); });
+		}
+
+#if VKTL_HAVE_WINDOW
+		// WARNING: if you using this function, then `instance` or `device group` will be initialized.
+		void queue_family_allow_present(uint32_t family, VK_ VkSurfaceKHR surface) const {
+			if (!phydv_) {
+				N::init();
+				phydv_ = parent_of<instance>(this)->physical_device(device_index_);
+			}
+
+			VK_ VkBool32 supported = VK_FALSE;
+			VK_ vkGetPhysicalDeviceSurfaceSupportKHR(physical_device(),
+				family, surface, &supported) | popup{ "[EXECUTION] Failed to query presentation support." };
+			if (!supported) {
+				throw error{ int(VK_ VK_ERROR_FEATURE_NOT_PRESENT),
+					"[EXECUTION] Queue family does not support the surface." };
 			}
 		}
-
-		auto& last_queue() noexcept {
-			assert(!handle_); // append operation only enable when not initialized.
-			assert(queues_.size()); // are you forget to append queue at first?
-			return queues_.back();
-		}
-
-		auto& queues() const noexcept { return queues_; }
+#endif
 
 	protected:
 		VK_ VkDeviceCreateInfo info{ .sType = VK_ VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO };
+		union {
+			uint32_t flags = 0u; // after initialization.
+			struct { // before initialization.
+				uint16_t last_queue_set_;
+				uint16_t reserved;
+			};
+		};
+		vectors<VK_ VkDeviceQueueCreateInfo, vector<float>> queue_infos;
 
 	private:
 		uint32_t device_index_ = 0u;
 		VK_ VkPhysicalDevice phydv_{ VK_NULL_HANDLE };
-		vectors<VK_ VkDeviceQueueCreateInfo, vector<float>> queues_;
 		copyable_if_null<VK_ VkDevice> handle_{ VK_NULL_HANDLE };
 		vectors<VK_ VkDescriptorSetLayout, default_descriptor_set_layout> set_layouts_;
 		vectors<VK_ VkPipelineLayout, default_pipeline_layout> pipe_layouts_;
@@ -362,8 +385,8 @@ VKTL_EXPORT_ namespace vktl::detail {
 	struct m<device, N> : basic_device<N> {
 		using base = basic_device<N>;
 
-		m(device info, auto&&...others)
-			: base{ info, forward_(others)... }
+		m(auto&&...others)
+			: base{ forward_(others)... }
 		{}
 
 		void relocate() {
@@ -376,79 +399,91 @@ VKTL_EXPORT_ namespace vktl::detail {
 	};
 
 #if defined(VK_VERSION_1_1)
-	template<typename N>
-	constexpr auto make_feature_tuple() {
+
+	namespace version {
+		template<typename N>
+		constexpr auto device_feature_tuple() {
 #if defined(VK_VERSION_1_4)
-		if constexpr (inside_parent<N, instance, version1_4>) {
-			return::std::tuple{
-				VK_ VkPhysicalDeviceVulkan11Features{
-					.sType = VK_ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES },
-				VK_ VkPhysicalDeviceVulkan12Features{
-					.sType = VK_ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES },
-				VK_ VkPhysicalDeviceVulkan13Features{
-					.sType = VK_ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES },
-				VK_ VkPhysicalDeviceVulkan14Features{
-					.sType = VK_ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_4_FEATURES },
-			};
-		}
-		else
+			if constexpr (inside_parent<N, instance, version1_4>) {
+				return::std::tuple{
+					VK_ VkPhysicalDeviceVulkan11Features{
+						.sType = VK_ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES },
+					VK_ VkPhysicalDeviceVulkan12Features{
+						.sType = VK_ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES },
+					VK_ VkPhysicalDeviceVulkan13Features{
+						.sType = VK_ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES },
+					VK_ VkPhysicalDeviceVulkan14Features{
+						.sType = VK_ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_4_FEATURES },
+				};
+			}
+			else
 #endif
 #if defined(VK_VERSION_1_3)
-		if constexpr (inside_parent<N, instance, version1_3>) {
-			return::std::tuple{
-				VK_ VkPhysicalDeviceVulkan11Features{
-					.sType = VK_ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES },
-				VK_ VkPhysicalDeviceVulkan12Features{
-					.sType = VK_ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES },
-				VK_ VkPhysicalDeviceVulkan13Features{
-					.sType = VK_ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES },
-			};
-		}
-		else
+				if constexpr (inside_parent<N, instance, version1_3>) {
+					return::std::tuple{
+						VK_ VkPhysicalDeviceVulkan11Features{
+							.sType = VK_ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES },
+						VK_ VkPhysicalDeviceVulkan12Features{
+							.sType = VK_ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES },
+						VK_ VkPhysicalDeviceVulkan13Features{
+							.sType = VK_ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES },
+					};
+				}
+				else
 #endif
 #if defined(VK_VERSION_1_2)
-		if constexpr (have_parent_of<N, instance, version1_2>) {
-			return ::std::tuple{
-				VK_ VkPhysicalDeviceVulkan11Features{
-					.sType = VK_ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES },
-				VK_ VkPhysicalDeviceVulkan12Features{
-					.sType = VK_ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES },
-			};
-		}
-		else
+					if constexpr (have_parent_of<N, instance, version1_2>) {
+						return ::std::tuple{
+							VK_ VkPhysicalDeviceVulkan11Features{
+								.sType = VK_ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES },
+							VK_ VkPhysicalDeviceVulkan12Features{
+								.sType = VK_ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES },
+						};
+					}
+					else
 #endif
-		{
-			return::std::tuple{
-				VK_ VkPhysicalDeviceVulkan11Features{
-					.sType = VK_ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES },
-			};
+					{
+						return::std::tuple{
+							VK_ VkPhysicalDeviceVulkan11Features{
+								.sType = VK_ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES },
+						};
+					}
 		}
+		template<typename N>
+		using device_feature_tuple_t = decltype(device_feature_tuple<N>());
 	}
+
+
 
 	template<have_parent_of<instance, version1_1> N>
 	struct m<device, N> : basic_device<N> {
 		using base = basic_device<N>;
+		using feature_tuples_t = decltype(version::device_feature_tuple<N>());
 
-		constexpr m(device info, auto&&...others)
-			: base{ info, forward_(others) }
-		{
-		}
+		constexpr m(auto&&...others)
+			: base{ forward_(others)... }
+		{}
 
 		void relocate() {
 			base::relocate();
-			void* next = const_cast<void*>(::std::exchange(
-				this->info.pNext, static_cast<void const*>(&features)));
-			vkconnect(version_features);
-			features.pNext = next;
+			features.pNext = &get<0u>(version_features);
+			this->info.pEnabledFeatures = features.features;
+			vkconnect(version_features).pNext = ::std::exchange(this->info.pNext, &features);
+		}
+
+		template<typename T, typename V>
+		friend void set_features(m&, V T::*value, VK_ VkBool32 enable = false) 
+			requires(find_if_same_v<feature_tuples_t, T> != invalid) {
+			(get<T>(version_features).*value) = enable;
 		}
 
 	protected:
 		VK_ VkPhysicalDeviceFeatures2KHR features = {
 			.sType = VK_ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2_KHR,
 		};
-		decltype(make_feature_tuple<N>())
-			version_features = make_feature_tuple<N>();
+		feature_tuples_t version_features = version::device_feature_tuple<N>();
 	};
+
 #endif
 
 	using namespace device_extensions;

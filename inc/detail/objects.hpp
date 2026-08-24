@@ -160,11 +160,13 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 		static constexpr lock_duck_& get_lock() noexcept { return lock_duck; }
 
+		static constexpr auto allocator() noexcept { return nullptr; }
+
 	protected:
 		using self = c<i<1u>, b<C, Ts...>>;
 
 		static constexpr void relocate() noexcept {}
-		static constexpr auto allocator() noexcept { return nullptr; }
+		static constexpr void finalize() noexcept {}
 
 		constexpr self& as_self() noexcept { return *as_this(); }
 		constexpr self const& as_self() const noexcept { return *as_this(); }
@@ -266,11 +268,59 @@ VKTL_EXPORT_ namespace vktl::detail {
 		}
 	};
 
-	template<typename T>
-	struct is_host : ::std::false_type {};
+	// template<typename T>
+	// struct is_host : ::std::false_type {};
 
+	// this will change in future.
 	template<typename T>
-	concept extensions_tag = ::std::is_aggregate_v<T>;
+	concept creation_tag = ::std::is_aggregate_v<T>;
+
+	template<typename T, typename...Qs>
+	concept object_of = []() constexpr {
+		if constexpr (requires { T::template query<Qs...>(); }) {
+			return T::template query<Qs...>();
+		}
+		else {
+			return false;
+		}
+	}();
+
+	template<typename T, typename...Qs>
+	concept inside_object = []() constexpr {
+		if constexpr (requires { T::template query<Qs...>(); }) {
+			return T::template query<Qs...>(::std::in_place);
+		}
+		else {
+			return false;
+		}
+	}();
+
+	// the object contain a lock help operation thread safe. 
+	inline constexpr struct lockable_ {} lockable;
+	// cross thread shared use reference counter (not thread safe).
+	inline constexpr struct shared_ {} shared;
+	// cross thread shared use atomic reference counter.
+	inline constexpr struct cross_thread_shared_ {} cross_thread_shared;
+
+	template<typename N>
+	constexpr auto& lock_of(N* pthis) noexcept {
+		if constexpr (object_of<N, lockable_>) {
+			return pthis->get_lock();
+		}
+		else {
+			return lock_duck;
+		}
+	}
+
+	template<typename N>
+	constexpr auto locker_of(N* pthis) {
+		if constexpr (object_of<N, lockable_>) {
+			return::std::unique_lock(lock_of(pthis));
+		}
+		else {
+			return nullptr;
+		}
+	}
 
 	template<typename T>
 	struct object : T::type {
@@ -279,12 +329,10 @@ VKTL_EXPORT_ namespace vktl::detail {
 		using base = typename T::type;
 
 		template<typename...Args>
-			requires(((tuple_specialization_of<Args, object> || tuple_specialization_of<Args, s_> || is_host<Args>::value || extensions_tag<Args>) && ...))
+			requires(((tuple_specialization_of<Args, object> || !tuple_specialization_of<Args, s_> || creation_tag<Args>) && ...))
 		constexpr object(Args&&...args)
 			: object{ T::make_tuple(static_cast<Args&&>(args)...) } { 
-			if constexpr (requires{ base::finalize(); }) {
-				base::finalize();
-			}
+			base::finalize();
 		}
 
 		constexpr object(object const& object) requires(::std::copy_constructible<base>)
@@ -308,16 +356,18 @@ VKTL_EXPORT_ namespace vktl::detail {
 		}
 
 		void init() {
-			(void)base::relocate();
-			(void)base::init();
+			auto _ = locker_of(this);
+			base::relocate();
+			base::init();
 		}
 
 		void reset() {
-			(void)base::reset();
+			auto _ = locker_of(this);
+			base::reset();
 		}
 
 		template<typename O>
-			requires(extensions_tag<O>)
+			requires(creation_tag<O>)
 		constexpr auto operator|(O other) & {
 			return s_<object&, O>{ *this, other };
 		}
@@ -335,15 +385,13 @@ VKTL_EXPORT_ namespace vktl::detail {
 		template<typename Tuple>
 			requires(tuple_like_v<Tuple> && !tuple_specialization_of<Tuple, s_>)
 		constexpr object(Tuple&& tuple)
-			: object{ ::std::make_index_sequence<tuple_size_v<Tuple>>(), static_cast<Tuple&&>(tuple), }
-		{
+			: object{ ::std::make_index_sequence<tuple_size_v<Tuple>>(), static_cast<Tuple&&>(tuple), } {
 		}
 	};
 	template<typename...Args>
 	object(Args&&...) -> object<ob_<::std::remove_cvref_t<Args>...>>;
-
 	template<typename...Args>
-	object(s_<Args...>&&) -> object<ob_<::std::remove_cvref_t<Args>...>>;
+	object(s_<Args...>&&) -> object<ob_<Args...>>;
 
 	template<typename...Cs>
 	struct ob_<b<Cs...>> {
@@ -361,13 +409,6 @@ VKTL_EXPORT_ namespace vktl::detail {
 			}, ::std::move(first));
 		}
 	};
-
-	// the object contain a lock help operation thread safe. 
-	inline constexpr struct lockable_ {} lockable;
-	// cross thread shared use reference counter (not thread safe).
-	inline constexpr struct shared_ {} shared;
-	// cross thread shared use atomic reference counter.
-	inline constexpr struct cross_thread_shared_ {} cross_thread_shared;
 
 	// template<typename T, typename E>
 	// struct is_extend : ::std::false_type {};
@@ -391,7 +432,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 		}
 
 		constexpr auto&& as_tuple() { return static_cast<base&&>(*this); }
-		template<extensions_tag O>
+		template<creation_tag O>
 		constexpr auto operator|(O value) && noexcept { 
 			return make(::std::tuple_cat(as_tuple(), ::std::tuple(::std::move(value))), 
 				::std::make_index_sequence<sizeof...(Ts) + 1>()); 
@@ -429,50 +470,10 @@ VKTL_EXPORT_ namespace vktl::detail {
 	};
 
 	template<typename T, typename O>
-		requires(is_host<T>::value)
-	constexpr auto operator|(T value, O other)
-		noexcept {
+		requires(creation_tag<T> && creation_tag<O>)
+	constexpr auto operator|(T value, O other) noexcept {
 		return s_<T, O>{::std::move(value), ::std::move(other)};
 	}
-
-	template<typename T, typename...Qs>
-	concept object_of = []() constexpr { 
-		if constexpr (requires { T::template query<Qs...>(); }) {
-			return T::template query<Qs...>();
-		}
-		else {
-			return false;
-		}
-	}();
-
-	template<typename T, typename...Qs>
-	concept inside_object = []() constexpr {
-		if constexpr (requires { T::template query<Qs...>(); }) {
-			return T::template query<Qs...>(::std::in_place);
-		}
-		else {
-			return false;
-		}
-	}();
-
-	// reserve, maybe change implmentation.
-	template<typename T, typename...Qs>
-	concept chain_contain = object_of<T, Qs...>;
-
-
-	// template<typename T, typename Q>
-	// concept contain = object_of<T, Q> || parent_of<T, Q>;
-
-	// template<typename T>
-	// struct obtain_ {};
-
-	// template<size_t index, typename T>
-	// struct obtain_<c<i<index>, T>> { static constexpr auto value = index - 2u; };
-
-	// template<typename T, typename Tuple>
-	// constexpr auto&& obtain(Tuple&& tuples) requires(tuple_like_v<Tuple>) {
-	// 	return::std::get<obtain_<T>::value>(static_cast<Tuple&&>(tuples));
-	// }
 
 	template<typename...Qs, typename N>
 	constexpr auto parent_of(N* pthis) noexcept {
@@ -506,31 +507,9 @@ VKTL_EXPORT_ namespace vktl::detail {
 		}
 	}();
 
-
 	template<typename...Qs, typename N>
 	constexpr auto handle_of(N* pthis) noexcept {
 		return parent_of<Qs...>(pthis)->handle();
 	}
-
-	template<typename N>
-	constexpr auto& lock_of(N* pthis) noexcept {
-		if constexpr (object_of<N, lockable_>) {
-			return pthis->get_lock();
-		}
-		else {
-			return lock_duck;
-		}
-	}
-
-	template<typename N>
-	constexpr auto locker_of(N* pthis) {
-		if constexpr (object_of<N, lockable_>) {
-			return::std::unique_lock(lock_of(pthis));
-		}
-		else {
-			return nullptr;
-		}
-	}
-
 
 }

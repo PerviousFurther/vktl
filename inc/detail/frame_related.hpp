@@ -1,7 +1,7 @@
 #pragma once
 
 // --- Agents specification -------------------------------------------------
-// `frame_index_source/frame_scope` and `basic_frame_indexed*` provide allocation
+// `frame_index_source/frame_source` and `basic_frame_indexed*` provide allocation
 // multiplicity only. `frame_related` is the separate command-invalidation
 // capability and carries a relocation-stable scope ID plus per-frame revision.
 // Independent frame hosts must never share an ID because their counts match.
@@ -19,7 +19,7 @@
 VKTL_EXPORT_ namespace vktl::detail {
 	using vktl::frame_scope_id;
 
-	struct frame_scope; // tag for frame related objects.
+	struct frame_source; // tag for frame related objects.
 
 	inline frame_scope_id allocate_frame_scope_id() noexcept {
 		static::std::atomic<frame_scope_id> next{ 1u };
@@ -27,8 +27,15 @@ VKTL_EXPORT_ namespace vktl::detail {
 	}
 
 	template<typename N>
+	struct basic_frame_source : N {
+		basic_frame_source(auto&&...others)
+			: N{ forward_(others)... }
+		{}
+	};
+
+	template<typename N>
 	struct basic_frame_indexed : N {
-		static constexpr auto have_frame_scope = have_parent_of<N, frame_scope>;
+		static constexpr auto have_frame_scope = have_parent_of<N, frame_source>;
 
 		basic_frame_indexed(auto&&...others)
 			: N{ forward_(others)... }
@@ -37,7 +44,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 		constexpr uint32_t frame_count() const noexcept {
 			if constexpr (have_frame_scope) {
-				return parent_of<frame_scope>(this)->frame_count();
+				return parent_of<frame_source>(this)->frame_count();
 			}
 			else {
 				return 1u;
@@ -46,7 +53,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 		constexpr uint32_t frame_index() const noexcept {
 			if constexpr (have_frame_scope) {
-				return parent_of<frame_scope>(this)->frame_index();
+				return parent_of<frame_source>(this)->frame_index();
 			}
 			else {
 				return 0u;
@@ -55,12 +62,12 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 		constexpr frame_scope_id frame_scope_identity() const noexcept
 			requires(have_frame_scope) {
-			return parent_of<frame_scope>(this)->frame_scope_identity();
+			return parent_of<frame_source>(this)->frame_scope_identity();
 		}
 
 		constexpr uint64_t frame_revision(uint32_t frame) const noexcept
 			requires(have_frame_scope) {
-			return parent_of<frame_scope>(this)->frame_revision(frame);
+			return parent_of<frame_source>(this)->frame_revision(frame);
 		}
 	};
 
@@ -178,7 +185,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 	private:
 		handle_type& handle_at(uint32_t index) const noexcept {
 			if constexpr (base::have_frame_scope) {
-				assert(parent_of<frame_scope>(this)->frame_count() > index);
+				assert(parent_of<frame_source>(this)->frame_count() > index);
 				return handles_[index];
 			}
 			else {
@@ -221,7 +228,7 @@ VKTL_EXPORT_ namespace vktl::vptr {
 
 		template<typename T>
 		void rebind() noexcept {
-			vptr_ = {
+			vptr = {
 				.frame_index_ = [](void const* ptr) noexcept {
 					return static_cast<T const*>(ptr)->frame_index();
 				},
@@ -232,13 +239,13 @@ VKTL_EXPORT_ namespace vktl::vptr {
 		}
 
 		uint32_t frame_index() const noexcept {
-			return vptr_.frame_index_(C::get_this());
+			return vptr.frame_index_(C::get_this());
 		}
 		uint32_t frame_count() const noexcept {
-			return vptr_.frame_count_(C::get_this());
+			return vptr.frame_count_(C::get_this());
 		}
 
-		frame_index_source vptr_;
+		frame_index_source vptr;
 	};
 
 	struct frame_related {
@@ -257,7 +264,7 @@ VKTL_EXPORT_ namespace vktl::vptr {
 
 		template<typename T>
 		void rebind() noexcept {
-			vptr_ = {
+			vptr = {
 				.frame_scope_ = [](void const* ptr) noexcept {
 					return static_cast<T const*>(ptr)->frame_scope_identity();
 				},
@@ -274,19 +281,19 @@ VKTL_EXPORT_ namespace vktl::vptr {
 		}
 
 		detail::frame_scope_id frame_scope_identity() const noexcept {
-			return vptr_.frame_scope_(C::get_this());
+			return vptr.frame_scope_(C::get_this());
 		}
 		uint32_t frame_index() const noexcept {
-			return vptr_.frame_index_(C::get_this());
+			return vptr.frame_index_(C::get_this());
 		}
 		uint32_t frame_count() const noexcept {
-			return vptr_.frame_count_(C::get_this());
+			return vptr.frame_count_(C::get_this());
 		}
 		uint64_t frame_revision(uint32_t frame) const noexcept {
-			return vptr_.frame_revision_(C::get_this(), frame);
+			return vptr.frame_revision_(C::get_this(), frame);
 		}
 
-		frame_related vptr_;
+		frame_related vptr;
 	};
     
 }

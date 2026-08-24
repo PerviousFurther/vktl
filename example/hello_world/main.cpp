@@ -12,7 +12,7 @@ int main() {
 
 	object ins
 		= instance{ .name = "test", .version = 0 }
-	| instance_extensions::validation_layer;
+		| instance_extensions::validation_layer;
 
 	object win
 		= ins
@@ -55,7 +55,7 @@ int main() {
 	object swc
 		= dev | win // swapchain usually have two parents.
 		| swapchain{ .min_frame_count = 2u };
-	auto& swc_image = swc;
+	// auto& swc_image = swc.image();
 
 	// swapchain actually is frame related object, thus,
 	// object `inherit` from
@@ -121,7 +121,7 @@ int main() {
 	object exec 
 		= dev
 		| execution{ .thread_count = 1u }
-		| queue{ .family = 0u, .index = 0u }
+		| queue_{ .family = 0u, .index = 0u }
 		| queue_extensions::graphics
 		| queue_extensions::present;
 
@@ -140,6 +140,7 @@ int main() {
 
 	// refresh will trigger all binded object to initialize.
 	draw_triangle.refresh();
+	
 	while (is_running(hwnd)) {
 		// we can do upload here. since it is simple showcase, this will skipped.
 		// uniform.upload({
@@ -148,7 +149,7 @@ int main() {
 		// 	0.0f, 0.0f, 1.0f, 0.0f,
 		// 	0.0f, 0.0f, 0.0f, 1.0f,
 		// });
-		
+		draw_triangle.submit();
 		exec.submit(draw_triangle);
 	}
 }

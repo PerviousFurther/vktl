@@ -31,7 +31,7 @@ VKTL_EXPORT_ namespace vktl::vptr {
 
 			template<typename T>
 			void rebind() noexcept {
-				vptr_ = {
+				vptr = {
 					.handle_ = [](void const* ptr, uint32_t frame) -> host_handle_type {
 						return static_cast<T const*>(ptr)->handle(frame);
 					},
@@ -50,14 +50,14 @@ VKTL_EXPORT_ namespace vktl::vptr {
 				};
 			}
 
-			host_handle_type handle(uint32_t frame) const { return vptr_.handle_(C::get_this(), frame); }
-			view_type descriptor_view(uint32_t frame) const { return vptr_.view_(C::get_this(), frame); }
-			layout_type layout() const { return vptr_.layout_(C::get_this()); }
-			subresource_range range() const { return vptr_.range_(C::get_this()); }
-			uint32_t frame_count() const { return vptr_.frame_count_(C::get_this()); }
+			host_handle_type handle(uint32_t frame) const { return vptr.handle_(C::get_this(), frame); }
+			view_type descriptor_view(uint32_t frame) const { return vptr.view_(C::get_this(), frame); }
+			layout_type layout() const { return vptr.layout_(C::get_this()); }
+			subresource_range range() const { return vptr.range_(C::get_this()); }
+			uint32_t frame_count() const { return vptr.frame_count_(C::get_this()); }
 
 		private:
-			view_need_descriptor vptr_;
+			view_need_descriptor vptr;
 		};
 
 		vfn<host_handle_type(uint32_t) const> handle_;
