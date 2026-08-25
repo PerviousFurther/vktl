@@ -35,20 +35,24 @@ VKTL_EXPORT_ namespace vktl::detail {
 			uint32_t index = 0u; // descriptor range index.
 			uint32_t element = 0u; // index inside descriptor range.
 			bool is_mutable = false; // descriptor type is mutable.
+			bool is_indexing = false;
+			bool is_ = false;
 		};
-
-		VK_ VkDescriptorSetLayoutCreateFlags flags = 0u;
-		vectors<VK_ VkDescriptorSetLayoutBinding
+		using layouts_type = vectors<VK_ VkDescriptorSetLayoutBinding
 			, vector<box<vptr::sampler>>
-		#if defined(VK_EXT_descriptor_indexing)
+#if defined(VK_EXT_descriptor_indexing)
 			, VK_ VkDescriptorBindingFlagsEXT
-		#endif
-		#if defined(VK_VALVE_mutable_descriptor_type)
+#endif
+#if defined(VK_VALVE_mutable_descriptor_type)
 			, vector<VK_ VkDescriptorType>
-		#endif
-			> layouts;
+#endif
+		>;
+		using element_type = ::std::ranges::range_value_t<layouts_type>;
+		VK_ VkDescriptorSetLayoutCreateFlags flags = 0u;
+		layouts_type layouts;
 		
-		scope add(VK_ VkDescriptorSetLayoutBinding binding, vector<box<vptr::sampler>> sampler = {}
+		// AGENT SPECIFICATION: DO NOT TOUCH THIS FUNCTION.
+		scope add(VK_ VkDescriptorSetLayoutBinding const& binding, vector<box<vptr::sampler>> sampler = {}
 		#if defined(VK_EXT_descriptor_indexing)
 			, VK_ VkDescriptorBindingFlagsEXT flags = 0u
 		#endif
@@ -56,52 +60,119 @@ VKTL_EXPORT_ namespace vktl::detail {
 			, vector<VK_ VkDescriptorType> types = {}
 		#endif
 		) {
-			assert(sampler.empty() || binding.descriptorCount == sampler.size());
-			auto it = layouts.begin();
-			while (it != layouts.end() && it.get<0u>().binding < binding.binding) {
-				++it;
-			}
-
+			assert(binding.descriptorCount == sampler.size());
+			uint32_t bind_offset = binding.binding;
 			bool is_mutable = false;
-			if (it != layouts.end() && it.get<0u>().binding == binding.binding) {
-				auto& current = it.get<0u>();
-				assert(current.descriptorCount == binding.descriptorCount);
-				current.stageFlags |= binding.stageFlags;
-			#if defined(VK_VALVE_mutable_descriptor_type)
-				if (current.descriptorType != binding.descriptorType) {
-					auto& current_types = it.get<3u>();
-					insert(current_types, current.descriptorType);
-					insert(current_types, binding.descriptorType);
-					for (auto type : types) insert(current_types, type);
-					current.descriptorType = VK_ VK_DESCRIPTOR_TYPE_MUTABLE_VALVE;
-					is_mutable = true;
+			bool is_indexing = false;
+			auto it = layouts.begin();
+			while (it != layouts.end()) {
+				auto& value = it.get<0u>();
+				if (value.binding + value.descriptorCount < binding.binding) {
+					it++;
 				}
-			#else
-				assert(current.descriptorType == binding.descriptorType);
-			#endif
-			#if defined(VK_EXT_descriptor_indexing)
-				it.get<2u>() |= flags;
-				if ((it.get<2u>() & VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT_EXT) != 0u) {
-					this->flags |= VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT_EXT;
+				else {
+					break;
 				}
-			#endif
 			}
-			else {
-				it = layouts.insert(it, binding, ::std::move(sampler)
-			#if defined(VK_EXT_descriptor_indexing)
-					, flags
-			#endif
-			#if defined(VK_VALVE_mutable_descriptor_type)
-					, ::std::move(types)
-			#endif
-				);
-			}
+			// need merge. DO NOT MODIFY.
+			while (true) {
+				if (it == layouts.end()
+					|| subres.intersected(it.get<0u>().binding, it.get<0u>().descriptorCount, binding.binding, binding.descriptorCount)) {
+					bool can_break = false;
+					auto left_binding = it.get<0u>();
+					auto intersected = subres.get_intersect(left_binding.binding, left_binding.descriptorCount, binding.binding, binding.descriptorCount);
 
+					it.get<0u>().binding = intersected.offset;
+					it.get<0u>().descriptorCount = intersected.size;
+					it.get<0u>().stageFlags |= binding.stageFlags;
+
+					auto left_samplers = ::std::move(it.get<1u>());
+					::std::move(sampler.begin(), sampler.begin() + intersected.size, it.get<1u>().end());
+					sampler.erase(sampler.begin(), sampler.begin() + intersected.size);
+
+#if defined(VK_EXT_descriptor_indexing)
+					auto left_flags = it.get<2u>();
+					auto binding_flags = left_flags | flags;
+					it.get<2u>() |= flags;
+					if (binding_flags != 0u) is_indexing = true;
+					if ((binding_flags & VK_ VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT_EXT) != 0u) {
+						this->flags |= VK_ VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT_EXT;	
+					}
+#endif
+#if defined(VK_VALVE_mutable_descriptor_type)
+					auto left_types = ::std::move(it.get<3u>());
+					auto copy = left_types;
+					copy.insert(copy.end(), types.begin(), types.end());
+					if (left_binding.descriptorType != binding.descriptorType) {
+						it.get<0u>().descriptorType = VK_ VK_DESCRIPTOR_TYPE_MUTABLE_VALVE;
+						if (left_binding.descriptorType != VK_ VK_DESCRIPTOR_TYPE_MUTABLE_VALVE) {
+							insert(copy, left_binding.descriptorType);
+						}
+						if (binding.descriptorType != VK_ VK_DESCRIPTOR_TYPE_MUTABLE_VALVE) {
+							insert(copy, binding.descriptorType);
+						}
+						is_mutable = true;
+					}
+					it.get<3u>() = ::std::move(copy);
+#else
+					assert(left_binding.descriptorType == binding.descriptorType); // update sdk to support mutable descriptor.
+#endif
+					auto not_intersected = subres.get_not_intersected(left_binding.binding, left_binding.descriptorCount, binding.binding, binding.descriptorCount);
+					can_break = not_intersected.count == 2u;
+					for (auto c : ::std::move(not_intersected)) {
+						if (c.is_first) {
+							it = layouts.insert(it, left_binding, ::std::move(left_samplers)
+#if defined(VK_EXT_descriptor_indexing)
+								, left_flags
+#endif
+#if defined(VK_VALVE_mutable_descriptor_type)
+								, ::std::move(left_types)
+#endif
+							);
+						}
+						else {
+							it = layouts.insert(it, binding, ::std::move(sampler)
+#if defined(VK_EXT_descriptor_indexing)
+								, flags
+#endif
+#if defined(VK_VALVE_mutable_descriptor_type)
+								, ::std::move(types)
+#endif
+							);
+						}
+					}
+					if (can_break) {
+						break;
+					}
+				}
+				else if (binding.binding + binding.descriptorCount == it.get<0u>().binding) {
+					it = layouts.insert(it, binding, ::std::move(sampler)
+#if defined(VK_EXT_descriptor_indexing)
+						, flags
+#endif
+#if defined(VK_VALVE_mutable_descriptor_type)
+						, ::std::move(types)
+#endif
+					);
+					break;
+				}
+			}
 			return {
 				.index = uint32_t(::std::distance(layouts.begin(), it)),
-				.element = 0u,
+				.element = it.get<0u>().binding - bind_offset,
 				.is_mutable = is_mutable,
+				.is_indexing = is_indexing,
 			};
+		}
+		scope add(element_type const& value) {
+			return add(get<0u>(value), get<1u>(value), 
+#if defined(VK_EXT_descriptor_indexing)
+				get<2u>(value), 
+#endif
+#if defined(VK_VALVE_mutable_descriptor_type)
+				get<3u>(value)
+#endif
+			);
 		}
 
 		bool operator==(const default_descriptor_set_layout& other) const noexcept {
@@ -111,9 +182,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 	private:
 		static constexpr void insert(vector<VK_ VkDescriptorType>& vec, VK_ VkDescriptorType type) {
 			auto it = ::std::ranges::find(vec, type);
-			if (it == vec.end()) {
-				vec.emplace_back(type);
-			}
+			if (it == vec.end()) { vec.emplace_back(type); }
 		}
 	};
 

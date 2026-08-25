@@ -151,8 +151,8 @@ VKTL_EXPORT_ namespace vktl::detail {
 	};
 
 	template<typename N>
-	struct m<bind_set_, N> : basic_frame_indexed_handle<N, trait<bind_set_>> {
-		using base = basic_frame_indexed_handle<N, trait<bind_set_>>;
+	struct m<bind_set_, N> : basic_frame_indexed<N> {
+		using base = basic_frame_indexed<N>;
 
 		constexpr m(bind_set_, auto&&...others)
 			: base{ forward_(others)... }
@@ -160,22 +160,30 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 		~m() { reset(); }
 
-		default_bind_set_schema const& info() const noexcept {
-			return schema_;
+		void accept(uint32_t pass_id, default_bind_set_schema const& schema) {
+			auto _ = locker_of(this);
+			uint32_t set = 0u;
+			for (auto const& infos : schema) {
+				auto& set = schema_[set];
+				for (auto const& binding : infos.layouts) {
+					
+				}
+			}
+			
 		}
 
-		void accept(default_bind_set_schema const& schema) {
-			auto _ = locker_of(this);
-			if (!schema_accepted_) {
-				schema_ = schema;
-				schema_accepted_ = true;
-			}
-			else {
-				assert(schema_ == schema);
+		void init() {
+			N::init();
+			auto dv = parent_of<device>(this);
+			for (auto&& [info, layout] : schema_) {
+				if (layout == VK_NULL_HANDLE) {
+					layout = dv->create(info);
+				}
 			}
 		}
 
 		void reset() {
+			N::reset();
 			if (bind_.handle) bind_.free();
 			bind_ = {};
 			for (auto frame = 0u; frame < this->frame_count(); ++frame) {
@@ -184,14 +192,15 @@ VKTL_EXPORT_ namespace vktl::detail {
 			}
 		}
 
-		VK_ VkDescriptorSet descriptor_set(uint32_t frame, uint32_t set) const noexcept {
+		VK_ VkDescriptorSet descriptor_sets(uint32_t frame, uint32_t set) const noexcept {
 			if (frame >= this->frame_count()) return VK_NULL_HANDLE;
 			auto handle = base::handle(frame);
 			if (set >= handle.value.sets.size()) return VK_NULL_HANDLE;
 			return handle.value.sets[set];
 		}
 
-		
+		auto infos() const noexcept { return schema_.template column<0u>(); }
+		auto layouts() const noexcept { return schema_.template column<1u>(); }
 
 	protected:
 		void bind(default_resource_usage const&) {
@@ -236,11 +245,44 @@ VKTL_EXPORT_ namespace vktl::detail {
 		}
 
 	protected:
-		default_bind_set_schema schema_;
-
+		vectors<default_descriptor_set_layout, VK_ VkDescriptorSetLayout> schema_;
+		
 	private:
-		bool schema_accepted_ = false;
 		bind_descriptors bind_;
+	};
+
+	template<>
+	struct trait<framebuffer_> {
+		using handle_type = VK_ VkFramebuffer;
+		static constexpr auto create = &VK_ vkCreateFramebuffer;
+		static constexpr auto destroy = &VK_ vkDestroyFramebuffer;
+	};
+
+	template<typename N>
+	struct m<framebuffer_, N> : basic_frame_indexed_handle<N, trait<framebuffer_>> {
+		using base = basic_frame_indexed_handle<N, trait<framebuffer_>>;
+		using attachment_view = box<vptr::view<trait<image_view_>>>;
+
+		static_assert(have_parent_of<N, graphics_pass>, "`framebuffer` must use *graphics pass* as parent.");
+
+		constexpr m(framebuffer_, auto&&...others)
+			: base{ forward_(others)... }
+		{
+		}
+
+		void bind(uint32_t attachment, object_of<image_view_> auto& view) {
+			auto _ = locker_of(this);
+			assert(view.frame_count() == 1u
+				|| view.frame_count() == this->frame_count());
+			if (attachments_.size() <= attachment) {
+				attachments_.resize(size_t(attachment) + 1u);
+			}
+			attachments_[attachment] = view;
+		}
+
+	protected:
+		VK_ VkFramebufferCreateInfo info{ .sType = VK_ VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO };
+		vector<attachment_view> attachments_;
 	};
 
 	template<typename N, typename ViewTrait>
@@ -395,41 +437,4 @@ VKTL_EXPORT_ namespace vktl::detail {
 		using base = basic_allow_bind_resource<N, trait<image_view_>>;
 		constexpr m(allow_image_, auto&&...others) : base{ forward_(others)... } {}
 	};
-}
-
-VKTL_EXPORT_ namespace vktl::detail {
-
-	template<>
-	struct trait<framebuffer_> {
-		using handle_type = VK_ VkFramebuffer;
-		static constexpr auto create = &VK_ vkCreateFramebuffer;
-		static constexpr auto destroy = &VK_ vkDestroyFramebuffer;
-	};
-
-	template<typename N>
-	struct m<framebuffer_, N> : basic_frame_indexed_handle<N, trait<framebuffer_>> {
-		using base = basic_frame_indexed_handle<N, trait<framebuffer_>>;
-		using attachment_view = box<vptr::view<trait<image_view_>>>;
-
-		static_assert(have_parent_of<N, graphics_pass>, "`framebuffer` must use *graphics pass* as parent.");
-
-		constexpr m(framebuffer_, auto&&...others)
-			: base{ forward_(others)... }
-		{ }
-
-		void bind(uint32_t attachment, object_of<image_view_> auto& view) {
-			auto _ = locker_of(this);
-			assert(view.frame_count() == 1u
-				|| view.frame_count() == this->frame_count());
-			if (attachments_.size() <= attachment) {
-				attachments_.resize(size_t(attachment) + 1u);
-			}
-			attachments_[attachment] = view;
-		}
-
-	protected:
-		VK_ VkFramebufferCreateInfo info{ .sType = VK_ VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO };
-		vector<attachment_view> attachments_;
-	};
-
 }

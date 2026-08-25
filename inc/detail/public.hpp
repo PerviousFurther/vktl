@@ -876,6 +876,7 @@ VKTL_EXPORT_ namespace vktl {
 		inline constexpr type input = type(1u) << 4u;
 
 		inline constexpr type load = type(1u) << 5u;
+		inline constexpr type load_stencil = type(1u) << 10u;
 		inline constexpr type clear = type(1u) << 6u;
 		inline constexpr type clear_stencil = type(1u) << 7u;
 		inline constexpr type store = type(1u) << 8u;

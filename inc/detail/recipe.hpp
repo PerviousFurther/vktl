@@ -206,7 +206,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 			N::record_chain(context);
 			assert(context.frames);
 			auto frame = selected_frame(*info_.bind_set, *context.frames);
-			auto descriptor = info_.bind_set->descriptor_set(frame, info_.set);
+			auto descriptor = info_.bind_set->descriptor_sets(frame, info_.set);
 			assert(descriptor != VK_NULL_HANDLE && info_.layout != VK_NULL_HANDLE);
 			VK_ vkCmdBindDescriptorSets(context.command, info_.bind_point, info_.layout,
 				info_.set, 1u, &descriptor, 0u, nullptr);

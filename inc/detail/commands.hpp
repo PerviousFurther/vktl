@@ -37,6 +37,16 @@ VKTL_EXPORT_ namespace vktl::cmd {
 
 VKTL_EXPORT_ namespace vktl::detail {
 
+	struct begin_command {};
+
+	template<typename N>
+	struct m<begin_command, N> : basic_frame_indexed_handle<N> {
+		constexpr m(begin_command, auto&&...others)
+			: N{forward_(others)...} { }
+	protected:
+		uint32_t commnad_count = 0u;
+	};
+
 	template<object_of<pass_extensions::render_pass_> P, typename N>
 	struct m<cmd::bind_pass<P>, N> : N {
 		constexpr m(cmd::bind_pass<P> const& pass, auto&&...others)

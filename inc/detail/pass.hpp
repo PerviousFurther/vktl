@@ -27,9 +27,9 @@
 // 
 // Descriptor-set layouts are normalized value objects cached permanently by
 // the device. A pass and a bind set keep independent schema values/handles;
-// neither stores references into the other. Pipeline set numbers map through
-// `default_bind_set_schema::set_layout_indices`, whose holes remain `invalid`.
-// Pipeline-layout creation materializes an empty layout for every such hole.
+// neither stores references into the other. `default_bind_set_schema` stores
+// one entry per public Vulkan set number; an entry without bindings is a hole.
+// Pipeline-layout creation materializes the cached empty layout for each hole.
 // --------------------------------------------------------------------------
 
 VKTL_EXPORT_ namespace vktl::detail {
@@ -40,37 +40,33 @@ VKTL_EXPORT_ namespace vktl::detail {
 	template<typename Format>
 	struct basic_format_express;
 
-	struct default_bind_set_schema {
-		vector<default_descriptor_set_layout> layout_infos;
-		vector<uint16_t> set_layout_indices;
-
-		constexpr bool operator==(default_bind_set_schema const& other) const noexcept {
-			return layout_infos == other.layout_infos
-				&& set_layout_indices == other.set_layout_indices;
-		}
-	};
+	using default_bind_set_schema = vector<default_descriptor_set_layout>;
 
 	struct default_resource_usage {
 		uint16_t index = invalid;
 		uint16_t reserved = 0u;
 		VK_ VkObjectType resource_type = VK_ VK_OBJECT_TYPE_UNKNOWN;
 		VK_ VkDescriptorType type = VK_ VK_DESCRIPTOR_TYPE_MAX_ENUM;
-		VK_ VkShaderStageFlags shader_stages = 0u;
-		VK_ VkPipelineStageFlags stages = 0u;
-		VK_ VkAccessFlags access = 0u;
-		VK_ VkDependencyFlags dependency = 0u;
+		VK_ VkPipelineStageFlags stages = VK_ VkPipelineStageFlags(0u);
+		VK_ VkAccessFlags access = VK_ VkAccessFlags(0u);
+		VK_ VkDependencyFlags dependency = VK_ VkDependencyFlags(0u);
 		VK_ VkImageLayout layout = VK_ VK_IMAGE_LAYOUT_UNDEFINED;
 
+		// for descriptor set.
 		uint32_t set = invalid;
 		uint32_t binding = invalid;
-		uint64_t offset = maximum;
-		uint64_t usages = 0u; // since 
-		uint64_t attributes = 0u;
+		// for descriptor heap or descriptor buffer.
+		uint64_t offset = invalid;
+		uint64_t usages = 0u; // since usage2 is 64 bits.
 
 		constexpr bool uses_descriptor() const noexcept {
 			return type != VK_ VK_DESCRIPTOR_TYPE_MAX_ENUM;
 		}
 	};
+
+	namespace passes {
+
+	}
 
 	struct graphics_pass;
 	struct compute_pass;
@@ -101,13 +97,12 @@ VKTL_EXPORT_ namespace vktl::detail {
 		}
 
 	protected:
-		void append(default_resource_usage const& usage) {
-			usages_.emplace_back(usage);
+		friend constexpr void append(m& self, default_resource_usage const& usage) {
+			self.usages_.emplace_back(usage);
 		}
 
-		default_resource_usage& last_usage() noexcept {
-			assert(!usages_.empty());
-			return usages_.back();
+		friend constexpr auto& usages(m& self) noexcept {
+			return self.usages_;
 		}
 
 	private:
@@ -133,11 +128,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 		~basic_pipe_pass() { reset(); }
 
 		void fill(auto& bind_set) {
-			auto _ = locker_of(this);
-			bind_set.accept(schema_);
-			for (auto const& usage : this->usages()) {
-				bind_set.bind(usage);
-			}
+			fill(0u, bind_set);
 		}
 
 		VK_ VkPipelineLayout pipeline_layout() const noexcept {
@@ -145,50 +136,43 @@ VKTL_EXPORT_ namespace vktl::detail {
 		}
 
 		auto init() {
-			auto locker = N::init();
-
-			if (pipeline_layout_) return locker;
+			N::init();
+			if (pipeline_layout_) return;
 
 			auto pdv = parent_of<device>(this);
 			auto hdv = pdv->handle();
-
-			VK_ vkCreatePipelineCache(hdv, &cache_info, N::allocator(), &cache_)
-				| popup{ "[PASS] Create pipeline cache failure." };
-
 			try {
-				auto empty_layout = pdv->create(default_descriptor_set_layout{});
+				VK_ vkCreatePipelineCache(hdv, &cache_info, N::allocator(), &cache_)
+					| popup{ "[PASS] Create pipeline cache failure." };
+
 				vector<VK_ VkDescriptorSetLayout> layouts;
-				layouts.reserve(schema_.set_layout_indices.size());
-				for (auto index : schema_.set_layout_indices) {
-					layouts.emplace_back(index == invalid
-						? empty_layout
-						: pdv->create(schema_.layout_infos[index]));
+				layouts.reserve(schema_.size());
+				for (auto const& layout : schema_) {
+					layouts.emplace_back(pdv->create(layout));
 				}
 
-				default_pipeline_layout layout_info;
-				layout_info.layouts = ::std::move(layouts);
-				pipeline_layout_.value = pdv->create(::std::move(layout_info));
+				pipe_layout_info.layouts = ::std::move(layouts);
+				pipeline_layout_.value = pdv->create(pipe_layout_info);
 			}
 			catch (...) {
-				clear();
+				reset();
 				throw;
 			}
-
-			return locker;
 		}
 
 		auto reset() {
-			auto locker = N::reset();
-			clear();
-			return locker;
+			if (cache_) {
+				VK_ vkDestroyPipelineCache(handle_of<device>(this),
+					::std::exchange(cache_.value, VK_NULL_HANDLE), N::allocator());
+			}
+			pipeline_layout_.value = VK_NULL_HANDLE;
 		}
 
 	protected:
 		void finalize(bool allow_mutable = false) {
 			N::finalize();
 
-			vector<default_descriptor_set_layout> layouts_by_set;
-			vector<bool> used_sets;
+			default_bind_set_schema const& layouts_by_set = schema_;
 			for (auto const& usage : this->usages()) {
 				if (!usage.uses_descriptor()) continue;
 				assert(usage.set != invalid);
@@ -197,36 +181,18 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 				if (layouts_by_set.size() <= usage.set) {
 					layouts_by_set.resize(size_t(usage.set) + 1u);
-					used_sets.resize(size_t(usage.set) + 1u, false);
 				}
-				used_sets[usage.set] = true;
 				auto result = layouts_by_set[usage.set].add(VK_ VkDescriptorSetLayoutBinding{
 					.binding = usage.binding,
 					.descriptorType = usage.type,
 					.descriptorCount = 1u,
 					.stageFlags = usage.shader_stages,
 				});
-				assert(!result.is_mutable); // pass cannot have mutable descriptor.
+				assert(allow_mutable || !result.is_mutable);
 			}
-
-			default_bind_set_schema result;
-			result.set_layout_indices.resize(layouts_by_set.size(), uint16_t(invalid));
-			for (auto set = 0u; set < layouts_by_set.size(); ++set) {
-				if (!used_sets[set]) continue;
-
-				auto const& layout = layouts_by_set[set];
-				auto found = ::std::ranges::find(result.layout_infos, layout);
-				if (found == result.layout_infos.end()) {
-					result.layout_infos.emplace_back(layout);
-					found = result.layout_infos.end() - 1;
-				}
-				result.set_layout_indices[set] = uint16_t(
-					::std::distance(result.layout_infos.begin(), found));
-			}
-			schema_ = ::std::move(result);
 		}
 
-		void append_binding(uint32_t set, uint32_t binding) noexcept {
+		friend constexpr void append_binding(uint32_t set, uint32_t binding) noexcept {
 			auto& usage = this->last_usage();
 			assert(usage.uses_descriptor());
 			assert(usage.set == invalid || usage.set == set);
@@ -235,14 +201,21 @@ VKTL_EXPORT_ namespace vktl::detail {
 			usage.binding = binding;
 		}
 
-		void append_binding(uint64_t offset) noexcept {
+		friend constexpr void append_binding(uint64_t offset) noexcept {
 			auto& usage = this->last_usage();
 			assert(usage.offset == maximum || usage.offset == offset);
 			usage.offset = offset;
 		}
 
+		friend constexpr auto& pipe_layout_info(basic_pipe_pass& self) noexcept {
+			return self.pipe_layout_info;
+		}
+
 		VK_ VkPipelineCache pipeline_cache() const noexcept {
 			return cache_.value;
+		}
+		VK_ VkPipelineLayout pipeline_layout() const noexcept {
+			return pipeline_layout_.value;
 		}
 
 	protected:
@@ -250,15 +223,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 		VK_ VkPipelineCacheCreateInfo cache_info{ .sType = VK_ VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO, };
 
 	private:
-		void clear() {
-			if (cache_) {
-				VK_ vkDestroyPipelineCache(handle_of<device>(this),
-					::std::exchange(cache_.value, VK_NULL_HANDLE), N::allocator());
-			}
-			pipeline_layout_.value = VK_NULL_HANDLE;
-		}
-
-	private:
+		default_pipeline_layout pipe_layout_info;
 		reset_if_copy<VK_ VkPipelineCache> cache_{ VK_NULL_HANDLE };
 		reset_if_copy<VK_ VkPipelineLayout> pipeline_layout_{ VK_NULL_HANDLE };
 	};
@@ -336,35 +301,9 @@ VKTL_EXPORT_ namespace vktl::detail {
 	};
 #pragma endregion
 
-	struct shader_record {
-		VK_ VkPipelineShaderStageCreateInfo stage{
-			.sType = VK_ VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-			.pName = "main",
-		};
-		VK_ VkShaderModuleCreateInfo module_info{
-			.sType = VK_ VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
-		};
-		shader_handle source = nullptr;
-		reset_if_copy<VK_ VkShaderModule> module{ VK_NULL_HANDLE };
-
-		void relocate() noexcept {
-			stage.module = module.value;
-			if (source) {
-				module_info.codeSize = source->compiled.size();
-				module_info.pCode = source->compiled.empty() ? nullptr
-					: reinterpret_cast<uint32_t const*>(source->compiled.data());
-			}
-			else {
-				module_info.codeSize = 0u;
-				module_info.pCode = nullptr;
-			}
-		}
-	};
-
 	template<typename N>
 	struct basic_graphics_pass : basic_pipe_pass<N> {
 		using base = basic_pipe_pass<N>;
-		using base::append;
 
 		template<typename>
 		friend struct basic_shader_express;
@@ -378,54 +317,34 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 		~basic_graphics_pass() { reset(); }
 
-		void finalize() {
-			base::finalize();
-			relocate();
-		}
-
 		void relocate() noexcept {
 			N::relocate();
 			relocate_pipelines();
 		}
 
-		void init(VK_ VkRenderPass render_pass = VK_NULL_HANDLE) {
-			if (pipelines_.empty() || pipelines_.template get<5u>(0u)) return;
+		void init() {
+			N::init();
+			if (pipe_infos.size()) return;
 			auto hdv = handle_of<device>(this);
 			try {
-				for (auto index = 0u; index < pipelines_.size(); ++index) {
-					auto& info = pipelines_.template get<0u>(index);
-					auto& shaders = pipelines_.template get<1u>(index);
+				for (auto&& [info, shaders] : pipe_infos) {
 					info.layout = base::pipeline_layout();
-					info.renderPass = render_pass;
-					for (auto& shader : shaders) {
-						assert(shader.source);
-						assert(!shader.source->compiled.empty());
-						assert((shader.source->compiled.size() % sizeof(uint32_t)) == 0u);
-						shader.relocate();
-						VK_ vkCreateShaderModule(hdv, &shader.module_info,
-							N::allocator(), &shader.module)
+					for (auto& [stage, module, codes] : shaders) {
+						assert(codes.size()); // Pass not allow reset but init again.
+						module.codeSize = codes.size();
+						module.pCode = codes.data();
+						VK_ vkCreateShaderModule(hdv, 
+							&module, N::allocator(), &stage.module)
 							| popup{ "[PASS] Failed to create shader module." };
-						shader.stage.module = shader.module.value;
+						codes = {}; // free all memory.
 					}
-					relocate_pipeline(index);
 				}
 
-				vector<VK_ VkPipeline> handles(pipelines_.size(), VK_NULL_HANDLE);
-				try {
-					VK_ vkCreateGraphicsPipelines(hdv, base::pipeline_cache(),
-						uint32_t(pipelines_.size()), pipelines_.template data<0u>(),
-						N::allocator(), handles.data())
-						| popup{ "[PASS] Failed to create graphics pipelines." };
-				}
-				catch (...) {
-					for (auto handle : handles) {
-						if (handle) VK_ vkDestroyPipeline(hdv, handle, N::allocator());
-					}
-					throw;
-				}
-				for (auto index = 0u; index < pipelines_.size(); ++index) {
-					pipelines_.template get<5u>(index).value = handles[index];
-				}
+				VK_ vkCreateGraphicsPipelines(hdv,
+					base::pipeline_cache(), uint32_t(pipe_infos.size()), pipe_infos.template data<0u>(), 
+					N::allocator(), pipe_handles_.data())
+					| popup{ "[PASS] Failed to create graphics pipelines." };
+				clear_shaders();
 			}
 			catch (...) {
 				reset();
@@ -434,53 +353,32 @@ VKTL_EXPORT_ namespace vktl::detail {
 		}
 
 		void reset() {
+			N::reset();
 			auto hdv = handle_of<device>(this);
-			for (auto index = 0u; index < pipelines_.size(); ++index) {
-				auto& handle = pipelines_.template get<5u>(index);
-				if (handle) {
-					VK_ vkDestroyPipeline(hdv,
-						::std::exchange(handle.value, VK_NULL_HANDLE),
-						N::allocator());
+			for (auto pipe : pipe_handles_) {
+				if (pipe != VK_NULL_HANDLE) {
+					VK_ vkDestroyPipeline(hdv, ::std::exchange(pipe, VK_NULL_HANDLE), N::allocator());
+				}
+				else {
+					break;
 				}
 			}
-			for (auto index = 0u; index < pipelines_.size(); ++index) {
-				for (auto& shader : pipelines_.template get<1u>(index)) {
-					if (shader.module) {
-						VK_ vkDestroyShaderModule(hdv,
-							::std::exchange(shader.module.value, VK_NULL_HANDLE),
-							N::allocator());
-						shader.stage.module = VK_NULL_HANDLE;
-					}
-				}
-			}
+			clear_shaders();
 		}
 
 		VK_ VkPipeline pipe(uint16_t index) const noexcept {
-			assert(index < pipelines_.size());
-			return pipelines_.template get<5u>(index).value;
+			assert(index < pipe_infos.size());
+			return pipe_infos.template get<5u>(index).value;
 		}
 
 		uint16_t pipe_count() const noexcept {
-			assert(pipelines_.size() <= uint16_t(maximum));
-			return uint16_t(pipelines_.size());
+			assert(pipe_infos.size() <= uint16_t(maximum));
+			return uint16_t(pipe_infos.size());
 		}
 
 	protected:
-		uint16_t append(VK_ VkGraphicsPipelineCreateInfo info) {
-			assert(pipelines_.size() < uint16_t(maximum));
-			auto color_blend = defaultColorBlendState;
-			vector<VK_ VkPipelineColorBlendAttachmentState> color_attachments;
-			if (info.pColorBlendState) {
-				color_blend = *info.pColorBlendState;
-				assert(info.pColorBlendState->attachmentCount == 0u
-					|| info.pColorBlendState->pAttachments);
-				if (info.pColorBlendState->attachmentCount) {
-					color_attachments.assign(
-						info.pColorBlendState->pAttachments,
-						info.pColorBlendState->pAttachments
-							+ info.pColorBlendState->attachmentCount);
-				}
-			}
+		void append(VK_ VkGraphicsPipelineCreateInfo info) {
+			info.pColorBlendState = &defaultColorBlendState;
 			info.pVertexInputState = &defaultVertexInputState;
 			info.pInputAssemblyState = &defaultInputAssemblyState;
 			info.pTessellationState = &defaultTessellationState;
@@ -489,115 +387,58 @@ VKTL_EXPORT_ namespace vktl::detail {
 			info.pMultisampleState = &defaultMultisampleState;
 			info.pDepthStencilState = &defaultDepthStencilState;
 			info.pDynamicState = &defaultDynamicState;
-			pipelines_.emplace_back(info, vector<shader_record>{},
-				vector<VK_ VkPipelineShaderStageCreateInfo>{}, color_blend,
-				::std::move(color_attachments),
-				reset_if_copy<VK_ VkPipeline>{ VK_NULL_HANDLE });
-			relocate_pipelines();
-			return uint16_t(pipelines_.size() - 1u);
+			pipe_infos.emplace_back(::std::move(info), by_default);
 		}
 
-		void append_shader(shader_handle shader,
-			VK_ VkPipelineShaderStageCreateInfo info) {
-			assert(shader);
-			assert(!pipelines_.empty());
-			info.module = VK_NULL_HANDLE;
-			pipelines_.template get<1u>(pipelines_.size() - 1u).emplace_back(shader_record{
-				.stage = info,
-				.source = shader,
-			});
-			relocate_pipeline(pipelines_.size() - 1u);
-		}
-
-		void customize_shader_entry_point(char const* name) noexcept {
-			assert(name);
-			last_shader_stage().pName = name;
-		}
-
-		VK_ VkGraphicsPipelineCreateInfo& last_pipe() noexcept {
-			assert(!pipelines_.empty());
-			return pipelines_.template get<0u>(pipelines_.size() - 1u);
-		}
-
-		VK_ VkPipelineShaderStageCreateInfo& last_shader_stage() noexcept {
-			assert(!pipelines_.empty());
-			auto& shaders = pipelines_.template get<1u>(pipelines_.size() - 1u);
-			assert(!shaders.empty());
-			return shaders.back().stage;
-		}
-
-		void append(VK_ VkFormat format) {
-			assert(format != VK_ VK_FORMAT_UNDEFINED);
-			auto const& usage = this->last_usage();
-			assert(usage.resource_type == VK_ VK_OBJECT_TYPE_IMAGE);
-			assert(usage.index != invalid);
-			if (attachment_formats_.size() <= usage.index) {
-				attachment_formats_.resize(size_t(usage.index) + 1u,
-					VK_ VK_FORMAT_UNDEFINED);
-			}
-			auto& current = attachment_formats_[usage.index];
-			assert(current == VK_ VK_FORMAT_UNDEFINED || current == format);
-			current = format;
-		}
-
-		VK_ VkFormat attachment_format(uint16_t index) const noexcept {
-			assert(index < attachment_formats_.size());
-			return attachment_formats_[index];
-		}
-
-		void configure_color_attachments(uint16_t pipeline, uint32_t count) {
-			assert(pipeline < pipelines_.size());
-			auto& attachments = pipelines_.template get<4u>(pipeline);
-			if (attachments.empty()) {
-				attachments.resize(count, defaultColorBlendAttachment);
-			}
-			else {
-				assert(attachments.size() == count);
-			}
-			relocate_pipeline(pipeline);
-		}
-
-		VK_ VkGraphicsPipelineCreateInfo& pipeline_info(size_t index) noexcept {
-			assert(index < pipelines_.size());
-			return pipelines_.template get<0u>(index);
+		friend constexpr auto& pipeline_info(basic_pipe_pass& self) noexcept {
+			assert(!self.pipe_infos.empty());
+			return self.pipe_infos;
 		}
 
 	private:
+		void clear_shaders() {
+			for (auto&& [_, vecs] : pipe_infos) {
+				for (auto&& [stage, module, codes] : vecs) {
+					if (stage.module) {
+						VK_ vkDestroyShaderModule(hdv, ::std::exchange(shader.module, VK_NULL_HANDLE), N::allocator());
+					}
+					else {
+						break;
+					}
+				}
+			}
+		}
 		void relocate_pipelines() noexcept {
-			for (auto index = 0u; index < pipelines_.size(); ++index) {
+			for (auto index = 0u; index < pipe_infos.size(); ++index) {
 				relocate_pipeline(index);
 			}
 		}
 
 		void relocate_pipeline(size_t index) noexcept {
-			auto& info = pipelines_.template get<0u>(index);
-			auto& shaders = pipelines_.template get<1u>(index);
-			auto& stages = pipelines_.template get<2u>(index);
-			auto& color_blend = pipelines_.template get<3u>(index);
-			auto& color_attachments = pipelines_.template get<4u>(index);
-			for (auto& shader : shaders) shader.relocate();
-			stages.resize(shaders.size());
-			for (auto shader = 0u; shader < shaders.size(); ++shader) {
-				stages[shader] = shaders[shader].stage;
-			}
-			info.stageCount = uint32_t(stages.size());
-			info.pStages = data_or_null(stages);
-			color_blend.attachmentCount = uint32_t(color_attachments.size());
-			color_blend.pAttachments = data_or_null(color_attachments);
-			info.pColorBlendState = &color_blend;
+			auto& info = pipe_infos.template get<0u>(index);
+			auto& shaders = pipe_infos.template get<1u>(index);
+			info.pStages = shaders.template column<0u>().data();
 		}
+
+	protected:
 		vectors<VK_ VkGraphicsPipelineCreateInfo,
-			vectors<VK_ VkPipelineShaderStageCreateInfo, VK_ VkShaderModuleCreateInfo>> pipelines_;
-		vector<VK_ VkFormat> attachment_formats_;
-		vector<reset_if_copy<VK_ VkPipeline>> pipe_handles_;
+			vectors<VK_ VkPipelineShaderStageCreateInfo,
+			VK_ VkShaderModuleCreateInfo,
+			vector<uint32_t>>> pipe_infos;
+
+		vector<VK_ VkPipeline> pipes;
 	};
+
+	inline constexpr bool is_attachment(uint64_t usage) {
+		
+	}
 
 	inline constexpr bool attachment_has(uint64_t attributes, attachment_attribute::type value) noexcept {
 		return (attributes & value) != 0u;
 	}
 
 	inline constexpr auto attachment_role(uint64_t attributes) noexcept {
-		return attachment_attribute::type(attributes) & attachment_attribute::type(0x1fu);
+		return attachment_attribute::type(attributes) & attachment_attribute::type(0x3fu);
 	}
 
 	inline constexpr VK_ VkImageLayout attachment_layout(uint64_t attributes) noexcept {
@@ -629,9 +470,6 @@ VKTL_EXPORT_ namespace vktl::detail {
 	struct m<render_pass_, N> : basic_graphics_pass<N> {
 		using base = basic_graphics_pass<N>;
 		using base::append;
-		friend struct express<pipe_extensions::subpass>;
-		template<typename>
-		friend struct basic_resource_usage_express;
 
 		m(render_pass_, auto&&... infos)
 			: base{ forward_(infos)... }
@@ -673,8 +511,8 @@ VKTL_EXPORT_ namespace vktl::detail {
 				subpass.pResolveAttachments = data_or_null(resolves);
 				assert(depth_stencil.size() <= 1u);
 				subpass.pDepthStencilAttachment = data_or_null(depth_stencil);
-				subpass.preserveAttachmentCount = uint32_t(preserves.size());
-				subpass.pPreserveAttachments = data_or_null(preserves);
+				// subpass.preserveAttachmentCount = uint32_t(preserves.size());
+				// subpass.pPreserveAttachments = data_or_null(preserves);
 			}
 			info.attachmentCount = uint32_t(attachments_.size());
 			info.pAttachments = data_or_null(attachments_);
@@ -716,20 +554,13 @@ VKTL_EXPORT_ namespace vktl::detail {
 		VK_ VkRenderPass pass() const noexcept { return handle_.value; }
 
 	protected:
-		void append_subpass(uint16_t subpass) {
-			assert(base::pipe_count() != 0u);
-			ensure_subpass(subpass);
-			base::last_pipe().subpass = subpass;
-		}
-
-		void append(default_resource_usage const& usage) {
-			base::append(usage);
-			if (usage.resource_type != VK_ VK_OBJECT_TYPE_IMAGE
-				|| attachment_role(usage.attributes) == 0u) return;
+		friend constexpr void append(m& self, default_resource_usage const& usage) {
+			append(static_cast<base&>(self), usage);
+			if (usage.resource_type != VK_ VK_OBJECT_TYPE_IMAGE || attachment_role(usage.attributes) == 0u) return;
 
 			assert(base::pipe_count() != 0u);
 			assert(usage.index != invalid);
-			auto subpass = base::last_pipe().subpass;
+			auto subpass = .subpass;
 			ensure_subpass(uint16_t(subpass));
 			ensure_attachment(usage.index);
 
@@ -752,7 +583,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 					: VK_ VK_ATTACHMENT_LOAD_OP_DONT_CARE;
 				description.stencilLoadOp = attachment_has(usage.attributes, attachment_attribute::clear_stencil)
 					? VK_ VK_ATTACHMENT_LOAD_OP_CLEAR
-					: attachment_has(usage.attributes, attachment_attribute::load)
+					: attachment_has(usage.attributes, attachment_attribute::load_stencil)
 					? VK_ VK_ATTACHMENT_LOAD_OP_LOAD
 					: VK_ VK_ATTACHMENT_LOAD_OP_DONT_CARE;
 				description.initialLayout = (attachment_has(usage.attributes, attachment_attribute::clear)
@@ -769,6 +600,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 				.attachment = usage.index,
 				.layout = usage.layout,
 			};
+			// TODO: switch.
 			if (role == attachment_attribute::color) {
 				insert_reference(subpasses_.template get<2u>(subpass), reference);
 			}
@@ -789,15 +621,10 @@ VKTL_EXPORT_ namespace vktl::detail {
 			append_dependency(uint16_t(subpass), usage);
 		}
 
-		VK_ VkRenderPassCreateInfo info;
+	protected:
+		VK_ VkRenderPassCreateInfo info{ .sType = VK_ VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO };
 
 	private:
-		struct previous_attachment_usage {
-			bool valid = false;
-			uint16_t subpass = 0u;
-			default_resource_usage usage;
-		};
-
 		void ensure_subpass(uint16_t index) {
 			if (subpasses_.size() <= index) {
 				auto old_size = subpasses_.size();
@@ -818,16 +645,15 @@ VKTL_EXPORT_ namespace vktl::detail {
 			}
 		}
 
-		static void insert_reference(vector<VK_ VkAttachmentReference>& references,
-			VK_ VkAttachmentReference reference) {
-			auto found = ::std::ranges::find_if(references, [=](auto const& current) {
-				return current.attachment >= reference.attachment;
+		static void insert_reference(vector<VK_ VkAttachmentReference>& references, VK_ VkAttachmentReference reference) {
+			auto it = ::std::ranges::lower_bound(references, [=](auto const& current) {
+				return current.attachment < reference.attachment;
 			});
-			if (found == references.end() || found->attachment != reference.attachment) {
-				references.insert(found, reference);
+			if (it == references.end() || it->attachment != reference.attachment) {
+				references.insert(it, reference);
 			}
 			else {
-				assert(found->layout == reference.layout);
+				assert(it->layout == reference.layout);
 			}
 		}
 
@@ -854,23 +680,17 @@ VKTL_EXPORT_ namespace vktl::detail {
 				found->dstAccessMask |= usage.access;
 				found->dependencyFlags |= previous.usage.dependency | usage.dependency;
 			}
-			previous = previous_attachment_usage{
-				.valid = true,
-				.subpass = subpass,
-				.usage = usage,
-			};
 		}
 
+	private:
 		vector<VK_ VkAttachmentDescription> attachments_;
-		vector<bool> attachment_declared_;
 		vectors<VK_ VkSubpassDescription,
 			vector<VK_ VkAttachmentReference>,
 			vector<VK_ VkAttachmentReference>,
 			vector<VK_ VkAttachmentReference>,
-			vector<VK_ VkAttachmentReference>,
-			vector<uint32_t>> subpasses_;
+			vector<VK_ VkAttachmentReference>> subpasses_; // not support preserve attachment.
 		vector<VK_ VkSubpassDependency> dependencies_;
-		vector<previous_attachment_usage> previous_usages_;
+
 		reset_if_copy<VK_ VkRenderPass> handle_{ VK_NULL_HANDLE };
 	};
 
@@ -925,7 +745,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 	protected:
 		uint16_t append(VK_ VkGraphicsPipelineCreateInfo info) {
-			dynamic_rendering_record rendering;
+			//dynamic_rendering_record rendering;
 			rendering.next = info.pNext;
 			auto result = base::append(info);
 			renderings_.emplace_back(::std::move(rendering));
@@ -956,7 +776,8 @@ VKTL_EXPORT_ namespace vktl::detail {
 		}
 
 	private:
-		vectors<VK_ VkPipelineRenderingCreateInfoKHR, vector<VK_ VkFormat>> renderings_;
+		vectors<VK_ VkPipelineRenderingCreateInfoKHR, 
+			vector<VK_ VkFormat>> renderings_;
 	};
 #else
 	template<typename N>
@@ -969,27 +790,11 @@ VKTL_EXPORT_ namespace vktl::detail {
 	};
 #endif
 
-	struct compute_pipeline_record {
-		VK_ VkComputePipelineCreateInfo info{
-			.sType = VK_ VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
-			.stage = { .sType = VK_ VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO },
-		};
-		shader_record shader;
-		reset_if_copy<VK_ VkPipeline> handle{ VK_NULL_HANDLE };
-	};
-
 	template<typename N>
 	struct m<pass_extensions::compute_, N> : basic_pipe_pass<N> {
 		using base = basic_pipe_pass<N>;
-		using base::append;
-		friend struct express<pipe_>;
-		friend struct express<shader_extensions::customized_entry_point>;
-		template<typename>
-		friend struct basic_shader_express;
-		template<typename>
-		friend struct basic_resource_usage_express;
 
-		m(pass_extensions::compute_, auto&&... infos)
+		m(pass_extensions::compute_, auto&&...infos)
 			: base{ forward_(infos)... } {}
 
 		~m() { reset(); }
@@ -1001,7 +806,7 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 		void relocate() noexcept {
 			N::relocate();
-			for (auto& pipeline : pipelines_) {
+			for (auto& pipeline : pipe_infos) {
 				pipeline.shader.relocate();
 				pipeline.info.stage = pipeline.shader.stage;
 			}
@@ -1009,10 +814,10 @@ VKTL_EXPORT_ namespace vktl::detail {
 
 		auto init() {
 			auto locker = base::init();
-			if (pipelines_.empty() || pipelines_.front().handle) return locker;
+			if (pipe_infos.empty() || pipe_infos.front().handle) return locker;
 			auto hdv = handle_of<device>(this);
 			try {
-				for (auto& pipeline : pipelines_) {
+				for (auto& pipeline : pipe_infos) {
 					assert(pipeline.shader.source);
 					assert(!pipeline.shader.source->compiled.empty());
 					assert((pipeline.shader.source->compiled.size() % sizeof(uint32_t)) == 0u);
@@ -1026,9 +831,9 @@ VKTL_EXPORT_ namespace vktl::detail {
 				}
 
 				vector<VK_ VkComputePipelineCreateInfo> infos;
-				vector<VK_ VkPipeline> handles(pipelines_.size(), VK_NULL_HANDLE);
-				infos.reserve(pipelines_.size());
-				for (auto const& pipeline : pipelines_) infos.emplace_back(pipeline.info);
+				vector<VK_ VkPipeline> handles(pipe_infos.size(), VK_NULL_HANDLE);
+				infos.reserve(pipe_infos.size());
+				for (auto const& pipeline : pipe_infos) infos.emplace_back(pipeline.info);
 				try {
 					VK_ vkCreateComputePipelines(hdv, base::pipeline_cache(),
 						uint32_t(infos.size()), infos.data(), N::allocator(), handles.data())
@@ -1040,8 +845,8 @@ VKTL_EXPORT_ namespace vktl::detail {
 					}
 					throw;
 				}
-				for (auto index = 0u; index < pipelines_.size(); ++index) {
-					pipelines_[index].handle.value = handles[index];
+				for (auto index = 0u; index < pipe_infos.size(); ++index) {
+					pipe_infos[index].handle.value = handles[index];
 				}
 			}
 			catch (...) {
@@ -1058,30 +863,30 @@ VKTL_EXPORT_ namespace vktl::detail {
 		}
 
 		VK_ VkPipeline pipe(uint16_t index) const noexcept {
-			assert(index < pipelines_.size());
-			return pipelines_[index].handle.value;
+			assert(index < pipe_infos.size());
+			return pipe_infos[index].handle.value;
 		}
 
 		uint16_t pipe_count() const noexcept {
-			assert(pipelines_.size() <= uint16_t(maximum));
-			return uint16_t(pipelines_.size());
+			assert(pipe_infos.size() <= uint16_t(maximum));
+			return uint16_t(pipe_infos.size());
 		}
 
 	protected:
 		uint16_t append(VK_ VkComputePipelineCreateInfo info) {
-			assert(pipelines_.size() < uint16_t(maximum));
-			pipelines_.emplace_back(compute_pipeline_record{ .info = info });
-			return uint16_t(pipelines_.size() - 1u);
+			assert(pipe_infos.size() < uint16_t(maximum));
+			pipe_infos.emplace_back(compute_pipeline_record{ .info = info });
+			return uint16_t(pipe_infos.size() - 1u);
 		}
 
 		void append_shader(shader_handle shader,
 			VK_ VkPipelineShaderStageCreateInfo info) {
 			assert(shader);
-			assert(!pipelines_.empty());
-			assert(!pipelines_.back().shader.source);
+			assert(!pipe_infos.empty());
+			assert(!pipe_infos.back().shader.source);
 			info.module = VK_NULL_HANDLE;
-			pipelines_.back().shader.stage = info;
-			pipelines_.back().shader.source = shader;
+			pipe_infos.back().shader.stage = info;
+			pipe_infos.back().shader.source = shader;
 		}
 
 		void customize_shader_entry_point(char const* name) noexcept {
@@ -1090,14 +895,14 @@ VKTL_EXPORT_ namespace vktl::detail {
 		}
 
 		VK_ VkPipelineShaderStageCreateInfo& last_shader_stage() noexcept {
-			assert(!pipelines_.empty());
-			assert(pipelines_.back().shader.source);
-			return pipelines_.back().shader.stage;
+			assert(!pipe_infos.empty());
+			assert(pipe_infos.back().shader.source);
+			return pipe_infos.back().shader.stage;
 		}
 
 	private:
 		void reset_unlocked(VK_ VkDevice hdv) noexcept {
-			for (auto& pipeline : pipelines_) {
+			for (auto& pipeline : pipe_infos) {
 				if (pipeline.handle) {
 					VK_ vkDestroyPipeline(hdv,
 						::std::exchange(pipeline.handle.value, VK_NULL_HANDLE),
@@ -1111,8 +916,8 @@ VKTL_EXPORT_ namespace vktl::detail {
 				}
 			}
 		}
-
-		vector<compute_pipeline_record> pipelines_;
+		// [create info, shader codes].
+		vectors<VK_ VkComputePipelineCreateInfo, vector<uint32_t>> pipe_infos;
 	};
 
 	template<typename N>
