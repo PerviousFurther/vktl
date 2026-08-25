@@ -316,13 +316,13 @@ VKTL_EXPORT_ namespace vktl::detail {
 		using base::base;
 
 		constexpr byte_view() noexcept = default;
-		constexpr byte_view(void const* bytes, size_t size) noexcept
-			: base{ static_cast<::std::byte const*>(bytes), size } {
+		constexpr byte_view(void const* handle, size_t size) noexcept
+			: base{ static_cast<::std::byte const*>(handle), size } {
 		}
 
 		template<typename T>
-		constexpr byte_view(T const* bytes, size_t count) noexcept
-			: base{ reinterpret_cast<::std::byte const*>(bytes), count * sizeof(T) } {
+		constexpr byte_view(T const* handle, size_t count) noexcept
+			: base{ reinterpret_cast<::std::byte const*>(handle), count * sizeof(T) } {
 		}
 
 		constexpr byte_view(void const* begin, void const* end) noexcept
@@ -865,15 +865,17 @@ VKTL_EXPORT_ namespace vktl {
 	inline constexpr struct image_view_ {} image_view {};
 
 	struct uniform_buffer { uint32_t index; };
-
+	struct storage_buffer { uint32_t index; };
+	struct texel_buffer   { uint32_t index; };
+	struct storage_image  { uint32_t index; };
+	struct texel_image    { uint32_t index; };
+	struct sampled_image  { 
+		uint32_t index;
+		// invalid mean use static sampler at bind set.
+		uint32_t sampler_index = invalid; 
+	};
 	namespace attachment_attribute {
 		using type = uint16_t;
-
-		inline constexpr type color = type(1u) << 0u;
-		inline constexpr type depth = type(1u) << 1u;
-		inline constexpr type stencil = type(1u) << 2u;
-		inline constexpr type resolve = type(1u) << 3u;
-		inline constexpr type input = type(1u) << 4u;
 
 		inline constexpr type load = type(1u) << 5u;
 		inline constexpr type load_stencil = type(1u) << 10u;
@@ -882,12 +884,23 @@ VKTL_EXPORT_ namespace vktl {
 		inline constexpr type store = type(1u) << 8u;
 		inline constexpr type store_stencil = type(1u) << 9u;
 	}
-
-	struct attachment {
+	struct input_attachment {
+		uint16_t index = invalid; // index == invalid will consider as append.
+		attachment_attribute::type attribute
+			= attachment_attribute::load;
+	};
+	struct depth_stencil_attachment {
+		uint16_t index = invalid; // index == invalid will consider as append.
+		// no stencil operation, the index is ignored. else index == invalid will consider as append.
+		uint16_t stencil_index = invalid;
+		attachment_attribute::type attribute
+			= attachment_attribute::clear
+			| attachment_attribute::store;
+	};
+	struct color_attachment {
 		uint16_t index = invalid; // index == invalid will consider as append.
 		attachment_attribute::type attribute 
-			= attachment_attribute::color
-			| attachment_attribute::clear
+			= attachment_attribute::clear
 			| attachment_attribute::store;
 	};
 	
@@ -993,14 +1006,14 @@ VKTL_EXPORT_ namespace vktl {
 		using namespace shader_extensions;
 	}
 	struct vertex_shader {
-		shader_handle bytes;
+		shader_handle handle;
 	};
 
 	namespace fragment_shader_extensions {
 		using namespace shader_extensions;
 	}
 	struct fragment_shader {
-		shader_handle bytes;
+		shader_handle handle;
 	};
 
 

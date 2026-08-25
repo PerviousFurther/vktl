@@ -320,21 +320,21 @@ VKTL_EXPORT_ namespace vktl::detail {
 	}
 	
 
-	template<typename Format>
-	struct basic_format_express {
-		static constexpr void invoke(Format format, auto& base) {
-			auto value = format::to_vkformat(format);
+	template<>
+	struct express<image_format::format_color> {
+		static constexpr void invoke(image_format::format_color input, auto& base) {
+			auto value = format::to_vkformat(input);
 			assert(value != VK_ VK_FORMAT_UNDEFINED);
 			base.append(value);
 		}
 	};
 
 	template<>
-	struct express<image_format::format_color>
-		: basic_format_express<image_format::format_color> {
-		
+	struct express<image_format::format_depth> {
+		static constexpr void invoke(image_format::format_depth input, auto& base) {
+			auto value = format::to_vkformat(input);
+			assert(value != VK_ VK_FORMAT_UNDEFINED);
+			base.append(value);
+		}
 	};
-	template<>
-	struct express<image_format::format_depth>
-		: basic_format_express<image_format::format_depth> {};
 }
