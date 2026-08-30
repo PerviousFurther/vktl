@@ -10,556 +10,475 @@
 // owns only stable parent addresses and forwards initialization deliberately.
 
 VKTL_EXPORT_ namespace vktl::vptr {
-	using detail::box;
+  using detail::box;
 
-	struct initable {
-		template<typename C>
-		struct apply;
+  struct initable {
+    template <typename C> struct apply;
 
-		vfn<void()> init_ = nullptr;
-	};
+    template <typename T> constexpr void rebind() noexcept {
+      init_ = [](void *ptr) { static_cast<T *>(ptr)->init(); };
+    }
 
-	template<typename C>
-	struct initable::apply : C {
-		using base = C;
+    vfn<void()> init_ = nullptr;
+  };
 
-		template<typename>
-		friend struct apply;
+  template <typename C> struct initable::apply : C {
+    using base = C;
 
-		template<typename T>
-		void rebind() {
-			vptr.init_ = [](void* ptr) { static_cast<T*>(ptr)->init(); };
-		}
+    template <typename> friend struct apply;
 
-		void init() {
-			vptr.init_(C::get_this());
-		}
+    template <typename T> constexpr void rebind() noexcept {
+      vptr.template rebind<T>();
+    }
 
-		initable vptr;
-	};
+    void init() { vptr.init_(C::get_this()); }
 
-	// -----------------------------------------------------------------------------
-	// 2. resetable
-	// -----------------------------------------------------------------------------
-	struct resetable {
-		template<typename C>
-		struct apply;
+    initable vptr;
+  };
 
-		vfn<void()> reset_ = nullptr;
-	};
+  struct resetable {
+    template <typename C> struct apply;
 
-	template<typename C>
-	struct resetable::apply : C {
-		using base = C;
+    template <typename T> constexpr void rebind() noexcept {
+      reset_ = [](void *ptr) { static_cast<T *>(ptr)->reset(); };
+    }
 
-		template<typename T>
-		void rebind() {
-			this->template rebind_next<T>(this);
-			vptr.reset_ = [](void* ptr) { static_cast<T*>(ptr)->reset(); };
-		}
+    vfn<void()> reset_ = nullptr;
+  };
 
-		void reset() {
-			vptr.reset_(C::get_this());
-		}
+  template <typename C> struct resetable::apply : C {
+    using base = C;
 
-		resetable vptr;
-	};
+    template <typename T> constexpr void rebind() noexcept {
+      vptr.template rebind<T>();
+    }
 
-	template<typename C>
-	using reusable = resetable::apply<initable::apply<C>>;
+    void reset() { vptr.reset_(C::get_this()); }
 
-	// -----------------------------------------------------------------------------
-	// 3. handle_owner
-	// -----------------------------------------------------------------------------
-	template<typename Handle>
-	struct handle_owner {
-		using handle_type = Handle;
+    resetable vptr;
+  };
 
-		template<typename C>
-		struct apply;
+  template <typename C> using reusable = resetable::apply<initable::apply<C>>;
 
-		vfn<handle_type() const> handle_ = nullptr;
-	};
+  template <typename Handle> struct handle_owner {
+    using handle_type = Handle;
 
-	template<typename Handle>
-	template<typename C>
-	struct handle_owner<Handle>::apply : C {
-		using base = C;
+    template <typename C> struct apply;
 
-		template<typename T>
-		void rebind() {
-			vptr.handle_ = [](const void* ptr) -> handle_type {
-				return static_cast<const T*>(ptr)->handle();
-				};
-		}
+    template <typename T> constexpr void rebind() noexcept {
+      handle_ = [](const void *ptr) -> handle_type {
+        return static_cast<const T *>(ptr)->handle();
+      };
+    }
 
-		handle_type handle() const {
-			return vptr.handle_(C::get_this());
-		}
+    vfn<handle_type() const> handle_ = nullptr;
+  };
 
-		handle_owner vptr;
-	};
+  template <typename Handle>
+  template <typename C>
+  struct handle_owner<Handle>::apply : C {
+    using base = C;
 
-	// -----------------------------------------------------------------------------
-	// 4. element_of
-	// -----------------------------------------------------------------------------
-	template<typename E>
-	struct element_of {
-		template<typename C>
-		struct apply;
+    template <typename T> constexpr void rebind() noexcept {
+      vptr.template rebind<T>();
+    }
 
-		vfn<void(E*)> remove_element_ = nullptr;
-	};
+    handle_type handle() const { return vptr.handle_(C::get_this()); }
 
-	template<typename E>
-	template<typename C>
-	struct element_of<E>::apply : C {
-		using base = C;
-		using element_type = E;
+    handle_owner vptr;
+  };
 
-		template<typename T>
-		void rebind() {
-			vptr.remove_element_ =
-				[](void* ptr, element_type* element) {
-				static_cast<T*>(ptr)->remove_from_handle(element);
-				};
-		}
+  template <typename E> struct element_of {
+    template <typename C> struct apply;
 
-		void remove(element_type* element) {
-			vptr.remove_element_(C::get_this(), element);
-		}
+    template <typename T> constexpr void rebind() noexcept {
+      remove_element_ = [](void *ptr, E *element) {
+        static_cast<T *>(ptr)->remove_from_handle(element);
+      };
+    }
 
-		element_of vptr;
-	};
+    vfn<void(E *)> remove_element_ = nullptr;
+  };
 
-	// -----------------------------------------------------------------------------
-	// 5. unbindable
-	// -----------------------------------------------------------------------------
-	template<typename V = void> // V allow reference type.
-	struct unbindable {
-		using notifier_type = ::std::conditional_t<::std::is_void_v<V>,
-			vfn<void()>,
-			vfn<void(V)>>;
+  template <typename E> template <typename C> struct element_of<E>::apply : C {
+    using base = C;
+    using element_type = E;
 
-		template<typename C>
-		struct apply;
+    template <typename T> constexpr void rebind() noexcept {
+      vptr.template rebind<T>();
+    }
 
-		notifier_type notifier_ = nullptr;
-	};
+    void remove(element_type *element) {
+      vptr.remove_element_(C::get_this(), element);
+    }
 
-	template<typename V>
-	template<typename C>
-	struct unbindable<V>::apply : C {
-		using base = C;
+    element_of vptr;
+  };
 
-		template<typename T>
-		void rebind() {
-			if constexpr (::std::is_void_v<V>) {
-				vptr.notifier_ = [](void* ptr) { static_cast<T*>(ptr)->unbind(); };
-			}
-			else {
-				vptr.notifier_
-					= [](void* ptr, V value) { static_cast<T*>(ptr)->unbind(::std::move(value)); };
-			}
-		}
+  template <typename V = void> // V allow reference type.
+  struct unbindable {
+    using notifier_type =
+        ::std::conditional_t<::std::is_void_v<V>, vfn<void()>, vfn<void(V)>>;
 
-		void unbind() {
-			if constexpr (::std::is_void_v<V>) {
-				vptr.notifier_(C::get_this());
-			}
-			else {
-				vptr.notifier_(C::get_this(), V());
-			}
-		}
+    template <typename C> struct apply;
 
-		void unbind(V value) requires(!::std::is_void_v<V>) {
-			vptr.notifier_(C::get_this(), static_cast<V>(value));
-		}
+    template <typename T> constexpr void rebind() noexcept {
+      if constexpr (::std::is_void_v<V>) {
+        notifier_ = [](void *ptr) { static_cast<T *>(ptr)->unbind(); };
+      } else {
+        notifier_ = [](void *ptr, V value) {
+          static_cast<T *>(ptr)->unbind(::std::move(value));
+        };
+      }
+    }
 
-		unbindable vptr;
-	};
+    notifier_type notifier_ = nullptr;
+  };
 
-	// -----------------------------------------------------------------------------
-	// 6. bindable
-	// -----------------------------------------------------------------------------
-	template<typename V = void> // V allow reference type.
-	struct bindable {
-		using notifier_type = ::std::conditional_t<::std::is_void_v<V>, vfn<void()>, vfn<void(V)>>;
+  template <typename V> template <typename C> struct unbindable<V>::apply : C {
+    using base = C;
 
-		template<typename C>
-		struct apply;
+    template <typename T> constexpr void rebind() noexcept {
+      vptr.template rebind<T>();
+    }
 
-		notifier_type notifier_ = nullptr;
-	};
+    void unbind() {
+      if constexpr (::std::is_void_v<V>) {
+        vptr.notifier_(C::get_this());
+      } else {
+        vptr.notifier_(C::get_this(), V());
+      }
+    }
 
-	template<typename V>
-	template<typename C>
-	struct bindable<V>::apply : C {
-		using base = C;
+    void unbind(V value)
+      requires(!::std::is_void_v<V>)
+    {
+      vptr.notifier_(C::get_this(), static_cast<V>(value));
+    }
 
-		template<typename T>
-		void rebind() {
-			if constexpr (::std::is_void_v<V>) {
-				vptr.notifier_ = [](void* ptr) { static_cast<T*>(ptr)->bind(); };
-			}
-			else {
-				vptr.notifier_
-					= [](void* ptr, V value) {
-					static_cast<T*>(ptr)->bind(static_cast<V>(value)); };
-			}
-		}
+    unbindable vptr;
+  };
 
-		void bind() {
-			if constexpr (::std::is_void_v<V>) {
-				vptr.notifier_(C::get_this());
-			}
-			else {
-				vptr.notifier_(C::get_this(), V());
-			}
-		}
+  template <typename V = void> // V allow reference type.
+  struct bindable {
+    using notifier_type =
+        ::std::conditional_t<::std::is_void_v<V>, vfn<void()>, vfn<void(V)>>;
 
-		void bind(V value) requires(!::std::is_void_v<V>) {
-			vptr.notifier_(C::get_this(), ::std::move(value));
-		}
+    template <typename C> struct apply;
 
-		bindable vptr;
-	};
+    template <typename T> constexpr void rebind() noexcept {
+      if constexpr (::std::is_void_v<V>) {
+        notifier_ = [](void *ptr) { static_cast<T *>(ptr)->bind(); };
+      } else {
+        notifier_ = [](void *ptr, V value) {
+          static_cast<T *>(ptr)->bind(static_cast<V>(value));
+        };
+      }
+    }
 
-	// -----------------------------------------------------------------------------
-	// 7. child_of
-	// -----------------------------------------------------------------------------
-	template<typename VPtr, typename... Ts>
-	struct child_of {
-		template<typename C>
-		struct apply;
+    notifier_type notifier_ = nullptr;
+  };
 
-		vfn<box<VPtr>()> parent_;
-	};
+  template <typename V> template <typename C> struct bindable<V>::apply : C {
+    using base = C;
 
-	template<typename VPtr, typename... Ts>
-	template<typename C>
-	struct child_of<VPtr, Ts...>::apply : C {
-		using base = C;
+    template <typename T> constexpr void rebind() noexcept {
+      vptr.template rebind<T>();
+    }
 
-		template<typename T>
-		void rebind() {
-			vptr = {
-				.parent_ = [](void* ptr) -> box<VPtr> {
-					return static_cast<T*>(ptr)->template parent<Ts...>();
-				},
-			};
-		}
+    void bind() {
+      if constexpr (::std::is_void_v<V>) {
+        vptr.notifier_(C::get_this());
+      } else {
+        vptr.notifier_(C::get_this(), V());
+      }
+    }
 
-		auto parent() {
+    void bind(V value)
+      requires(!::std::is_void_v<V>)
+    {
+      vptr.notifier_(C::get_this(), ::std::move(value));
+    }
 
-		}
+    bindable vptr;
+  };
 
-	private:
-		child_of vptr;
-	};
+  // template<typename VPtr, typename... Ts>
+  // struct child_of {
+  // 	template<typename C>
+  // 	struct apply;
+  //
+  // 	template<typename T>
+  // 	constexpr void rebind() noexcept {
+  // 		parent_ = [](void* ptr) -> box<VPtr> {
+  // 			return static_cast<T*>(ptr)->template parent<Ts...>();
+  // 		};
+  // 	}
+  //
+  // 	vfn<box<VPtr>()> parent_;
+  // };
+  // template<typename VPtr, typename... Ts>
+  // template<typename C>
+  // struct child_of<VPtr, Ts...>::apply : C {
+  // 	using base = C;
+  //
+  // 	template<typename T>
+  // 	constexpr void rebind() noexcept { vptr.template rebind<T>(); }
+  //
+  // 	auto parent() {
+  // 	}
+  //
+  // private:
+  // 	child_of vptr;
+  // };
 
+  struct lockable {
+    template <typename T> constexpr auto rebind() noexcept {
+      get_lock_ = [](void const *ptr) constexpr {
+        if constexpr (requires(T &v) { 
+           { v.get_lock() } -> ::std::same_as<::std::mutex &>;
+        }) {
+          return static_cast<T const *>(ptr)->get_lock();
+        } else {
+          return nullptr;
+        }
+      };
+    }
+
+    template <typename C> struct apply;
+
+    vfn<::std::mutex *() const noexcept> get_lock_ = nullptr;
+  };
+  template <typename C> struct lockable::apply : C {
+    ::std::mutex *get_lock() const noexcept {
+      return vptr.get_lock_(C::get_this());
+    }
+
+    lockable vptr;
+  };
 }
 
 VKTL_EXPORT_ namespace vktl::detail {
 
-	// RI required interface.
-	template<typename N, typename...RI>
-	class basic_parent : N {
-		using child_box = box<RI...>;
+  // RI required interface.
+  // template<typename N, typename...RI>
+  // class basic_parent : N {
+  // 	using child_box = box<RI...>;
+  //
+  // protected:
+  // 	template<typename T>
+  // 	bool add_child(T& child) requires(::std::constructible_from<child_box,
+  // T&>) { 		void* pchild = ::std::addressof(child); 		auto it =
+  // childs_.find(pchild); 		if (it == childs_.end()) { 			childs_.emplace(pchild,
+  // child_box{ child }); 			return true;
+  // 		}
+  // 		else {
+  // 			return false;
+  // 		}
+  // 	}
+  //
+  // 	bool remove_child(void* child) {
+  // 		auto it = childs_.find(child);
+  // 		if (it != childs_.end()) {
+  // 			childs_.erase(it);
+  // 			return true;
+  // 		}
+  // 		else {
+  // 			return false;
+  // 		}
+  // 	}
+  //
+  // private:
+  // 	::std::unordered_map<void*, child_box> childs_;
+  // };
 
-	protected:
-		template<typename T>
-		bool add_child(T& child) requires(::std::constructible_from<child_box, T&>) {
-			void* pchild = ::std::addressof(child);
-			auto it = childs_.find(pchild);
-			if (it == childs_.end()) {
-				childs_.emplace(pchild, child_box{ child });
-				return true;
-			}
-			else {
-				return false;
-			}
-		}
+  template <typename N> struct m<shared_, N> : N {
+    m(auto, auto &&...others) : N{forward_(others)...} {}
 
-		bool remove_child(void* child) {
-			auto it = childs_.find(child);
-			if (it != childs_.end()) {
-				childs_.erase(it);
-				return true;
-			}
-			else {
-				return false;
-			}
-		}
+    // shared object usaully not on stack, copy or move is forbidden.
 
-	private:
-		::std::unordered_map<void*, child_box> childs_;
-	};
+    m(m const &) = delete;
+    m &operator=(m const &) = delete;
+    m(m &&) = delete;
+    m &operator=(m &&) = delete;
 
-	template<typename N>
-	struct m<shared_, N> : N {
-		m(auto, auto&&...others)
-			: N{ forward_(others)... }
-		{
-		}
+    uint32_t add_ref() noexcept {
+      auto _ = locker_of(this);
+      VKTL_ASSERT(refc_); // try add from on zero from's object.
+      return ++refc_;
+    }
+    uint32_t release() noexcept {
+      auto _ = locker_of(this);
+      VKTL_ASSERT(refc_); // try release on zero from's object.
+      return --refc_;
+    }
 
-		// shared object usaully not on stack, copy or move is forbidden.
+  private:
+    uint32_t refc_ = 1u;
+  };
 
-		m(m const&) = delete;
-		m& operator=(m const&) = delete;
-		m(m&&) = delete;
-		m& operator=(m&&) = delete;
-		
+  // cross thread shared object usaully not on stack, copy or move is forbidden.
+  template <typename N> struct m<cross_thread_shared_, N> : N {
 
-		uint32_t add_ref() noexcept {
-			::std::lock_guard _{ N::get_lock() };
-			assert(refc_); // try add from on zero from's object.
-			return ++refc_;
-			
-		}
-		uint32_t release() noexcept {
-			::std::lock_guard _{ N::get_lock() };
-			assert(refc_); // try release on zero from's object.
-			return --refc_;
-		}
+    m(auto, auto &&...others) : N{forward_(others)...} {}
 
-	private:
-		uint32_t refc_ = 1u;
-	};
+    uint32_t add_ref() noexcept {
+      auto old = refc_.fetch_add(1u, ::std::memory_order_relaxed);
+      VKTL_ASSERT(old); // try add from on zero referenced object.
+      return old + 1u;
+    }
+    uint32_t release() noexcept {
+      auto old = refc_.fetch_sub(1u, ::std::memory_order_acq_rel);
+      VKTL_ASSERT(old); // try sub from on zero referenced object.
+      return old - 1u;
+    }
 
-	// cross thread shared object usaully not on stack, copy or move is forbidden.
-	template<typename N>
-	struct m<cross_thread_shared_, N> : N {
+  private:
+    ::std::atomic_uint32_t refc_ = 1u;
+  };
 
-		m(auto, auto&&...others)
-			: N{ forward_(others)... }
-		{
-		}
+  using namespace extensions;
 
-		uint32_t add_ref() noexcept {
-			auto old = refc_.fetch_add(1u, ::std::memory_order_relaxed);
-			assert(old); // try add from on zero referenced object.
-			return old + 1u;
-		}
-		uint32_t release() noexcept {
-			auto old = refc_.fetch_sub(1u, ::std::memory_order_acq_rel);
-			assert(old); // try sub from on zero referenced object.
-			return old - 1u;
-		}
+  template <typename...Ts, typename N> struct m<from<Ts...>, N> : N {
+    static constexpr auto num_parents = sizeof...(Ts);
+    using parents = ts<Ts...>;
 
-	private:
-		::std::atomic_uint32_t refc_ = 1u;
-	};
+    constexpr m(from<Ts...> const &value, auto &&...others)
+        : N{forward_(others)...},
+          parents_{static_cast<typename from<Ts...>::base const &>(value)} {}
 
-	using namespace extensions;
+    template <typename... Qs> constexpr auto parent() const noexcept {
+      constexpr auto direct_index = parent_direct<0u, Qs...>();
+      if constexpr (direct_index < num_parents) {
+        return parent<direct_index>();
+      } else {
+        constexpr auto recursive_index = parent_recursive<0u, Qs...>();
+        if constexpr (recursive_index < num_parents) {
+          return parent<recursive_index>()->template parent<Qs...>();
+        } else {
+          return nullptr;
+        }
+      }
+    }
 
-	template<typename...Ts, typename N>
-	struct m<from<Ts...>, N> : N {
-		static constexpr auto num_parents = sizeof...(Ts);
-		using parents = ts<Ts...>;
+    template <size_t index> constexpr auto parent() const noexcept {
+      return ::std::get<index>(parents_);
+    }
+    constexpr auto parent() const noexcept { return ::std::get<0u>(parents_); }
 
-		constexpr m(from<Ts...> const& value, auto&&...others)
-			: N{ forward_(others)... }
-			, parents_{ static_cast<typename from<Ts...>::base const&>(value) } {
-		}
+    template <typename T> constexpr auto all_parent() const noexcept {
+      return [this]<size_t... indices>(::std::index_sequence<indices...>) {
+        return ::std::tuple(parent<indices>()...);
+      }(all_parent_impl<0u, T>());
+    }
 
-		template<typename...Qs>
-		constexpr auto parent() const noexcept {
-			constexpr auto direct_index = parent_direct<0u, Qs...>();
-			if constexpr (direct_index < num_parents) {
-				return parent<direct_index>();
-			}
-			else {
-				constexpr auto recursive_index = parent_recursive<0u, Qs...>();
-				if constexpr (recursive_index < num_parents) {
-					return parent<recursive_index>()->template parent<Qs...>();
-				}
-				else {
-					return nullptr;
-				}
-			}
-		}
+  protected:
+    void init() {
+      ::std::apply([](auto... ptr) { ((ptr->init()), ...); }, parents_);
+    }
 
-		template<size_t index>
-		constexpr auto parent() const noexcept {
-			return::std::get<index>(parents_);
-		}
-		constexpr auto parent() const noexcept {
-			return::std::get<0u>(parents_);
-		}
+  private:
+    template <size_t index, typename... Qs, size_t... indices>
+    static consteval auto
+    all_parent_impl(::std::index_sequence<indices...> = {}) {
+      if constexpr (index < num_parents) {
+        if constexpr (object_of<tuple_at_t<index, parents>, Qs...>) {
+          return all_parent_impl<index + 1u, Qs...>(
+              ::std::index_sequence<indices..., index>{});
+        } else {
+          return all_parent_impl<index + 1u, Qs...>(
+              ::std::index_sequence<indices...>{});
+        }
+      } else {
+        return ::std::index_sequence<indices...>{};
+      }
+    }
 
-		template<typename T>
-		constexpr auto all_parent() const noexcept {
-			return [this]<size_t...indices>(::std::index_sequence<indices...>) {
-				return::std::tuple(parent<indices>()...);
-			}(all_parent_impl<0u, T>());
-		}
+    template <size_t index = 0u, typename... Qs>
+    static consteval size_t parent_direct() noexcept {
+      if constexpr (index < num_parents) {
+        if constexpr (object_of<tuple_at_t<index, parents>, Qs...>) {
+          return index;
+        } else {
+          return parent_direct<index + 1, Qs...>();
+        }
+      } else {
+        return num_parents;
+      }
+    }
 
-	protected:
-		void init() { ::std::apply([](auto...ptr) { ((ptr->init()), ...); }, parents_); }
+    template <size_t index = 0u, typename... Qs>
+    static consteval size_t parent_recursive() noexcept {
+      if constexpr (index < num_parents) {
+        if constexpr (!::std::is_null_pointer_v<
+                          parent_t<tuple_at_t<index, parents>, Qs...>>) {
+          return index;
+        } else {
+          return parent_recursive<index + 1, Qs...>();
+        }
+      } else {
+        return num_parents;
+      }
+    }
 
-		// void reset() {
-		// 	::std::apply([](auto...ptr) { ((ptr->reset()), ...); }, parents_);
-		// }
+  private:
+    ::std::tuple<Ts *...> parents_;
+  };
 
-	private:
-		template<size_t index, typename...Qs, size_t...indices>
-		static consteval auto all_parent_impl(::std::index_sequence<indices...> = {}) {
-			if constexpr (index < num_parents) {
-				if constexpr (object_of<tuple_at_t<index, parents>, Qs...>) {
-					return all_parent_impl<index + 1u, Qs...>(
-						::std::index_sequence<indices..., index>{});
-				}
-				else {
-					return all_parent_impl<index + 1u, Qs...>(
-						::std::index_sequence<indices...>{});
-				}
-			}
-			else {
-				return::std::index_sequence<indices...>{};
-			}
-		}
+  template <typename N> struct m<lockable_, N> : N {
+    using mutex_type = ::std::mutex;
 
-		template<size_t index = 0u, typename...Qs>
-		static consteval size_t parent_direct() noexcept {
-			if constexpr (index < num_parents) {
-				if constexpr (object_of<tuple_at_t<index, parents>, Qs...>) {
-					return index;
-				}
-				else {
-					return parent_direct<index + 1, Qs...>();
-				}
-			}
-			else {
-				return num_parents;
-			}
-		}
+    m(lockable_, auto &&...others) : N{forward_(others)...} {}
 
-		template<size_t index = 0u, typename...Qs>
-		static consteval size_t parent_recursive() noexcept {
-			if constexpr (index < num_parents) {
-				if constexpr (!::std::is_null_pointer_v<parent_t<tuple_at_t<index, parents>, Qs...>>) {
-					return index;
-				}
-				else {
-					return parent_recursive<index + 1, Qs...>();
-				}
-			}
-			else {
-				return num_parents;
-			}
-		}
+    auto &get_lock() const noexcept { return lock_; }
 
-	private:
-		::std::tuple<Ts*...> parents_;
-	};
+  private:
+    mutable mutex_type lock_;
+  };
 
-	template<typename N>
-	struct m<lockable_, N> : N {
-		using mutex_type = ::std::mutex;
+  template <typename T> constexpr auto is_lockable = object_of<T, lockable_>;
 
-		m(lockable_, auto&&...others) : N{forward_(others)...} {}
+  using namespace extensions;
 
-		auto& get_lock() const noexcept { return lock_; }
+  template <typename N> struct m<allocate_from, N> : N {
+  private:
+    using allocator_type = box<vptr::handle_allocator>;
 
-	private:
-		mutable mutex_type lock_;
-	};
+  public:
+    constexpr m(allocate_from const &from, auto &&...others)
+        : N{forward_(others)...}, allocator_{from.allocator},
+          callbacks_{
+              .pUserData = &allocator_,
+              .pfnAllocation = [](void *p, size_t size, size_t alignment,
+                                  VkSystemAllocationScope) -> void * {
+                return static_cast<allocator_type *>(p)->allocate(size,
+                                                                  alignment);
+              },
+              .pfnReallocation = allocator_.reallocable()
+              ? [](void *p, void *ori, size_t size, size_t alignment,
+                   VkSystemAllocationScope) -> void * {
+                return static_cast<allocator_type *>(p)->reallocate(ori, size,
+                                                                    alignment);
+              }
+              : nullptr,
+              .pfnFree = [](void *p, void *ptr) -> void {
+                static_cast<allocator_type *>(p)->free(ptr);
+              },
+              .pfnInternalAllocation = nullptr,
+              .pfnInternalFree = nullptr,
+          } {}
 
-	template<typename T>
-	constexpr auto is_lockable = object_of<T, lockable_>;
+    void relocate() noexcept {
+      N::relocate();
+      callbacks_.pUserData = &allocator_;
+    }
 
-	template<typename T>
-	struct locked : handle_<T> {
-		using base = handle_<T>;
+    constexpr VK_ VkAllocationCallbacks const *allocator() const {
+      return &callbacks_;
+    }
 
-		// these for handles.
-		locked(T*& value, uint32_t index, lock_duck_ const& lock) 
-			: locked{ nullptr, index, value }
-		{}
-		locked(T*& value, uint32_t index, ::std::mutex& lock) 
-			: locked{ this->lock(&lock), index, value } 
-		{}
-		locked(T& value, uint32_t index, ::std::mutex* lock)
-			: locked{ this->lock(lock), index, value }
-		{}
-
-		// these for handle.
-		locked(T& value, lock_duck_ const& lock)
-			: base{ value }
-			, plock_{ nullptr }
-		{}
-		locked(T& value, ::std::mutex& lock)
-			: locked{this->lock(&lock), value}
-		{}
-		locked(T& value, ::std::mutex* lock)
-			: locked{ this->lock(&lock), value }
-		{}
-
-		locked(locked const&) = delete;
-		locked& operator=(locked const&) = delete;
-
-		~locked() { if (plock_) { plock_->unlock(); } }
-
-	private:
-		::std::mutex* lock(::std::mutex* ptr) {
-			if (ptr) {
-				ptr->lock();
-			}
-			return ptr;
-		}
-
-		locked(::std::mutex* lock, T& value) 
-			: base{value}
-			, plock_{lock} 
-		{}
-		locked(::std::mutex* lock, uint32_t index, T*& value) 
-			: base{value[index]}
-			, plock_{lock}
-		{}
-
-		::std::mutex* plock_;
-	};
-
-	using namespace extensions;
-
-	template<typename N>
-	struct m<allocate_from, N> : N {
-	private:
-		using allocator_type = box<vptr::handle_allocator>;
-
-	public:
-		constexpr m(allocate_from const& from, auto&&...others)
-			: N{forward_(others)...}
-			, allocator_{ from.allocator }
-			, callbacks_{
-				.pUserData = &allocator_,
-				.pfnAllocation = [](void* p, size_t size, size_t alignment, VkSystemAllocationScope) -> void* {
-					return static_cast<allocator_type*>(p)->allocate(size, alignment);
-				},
-				.pfnReallocation = allocator_.reallocable() ? [](void* p, void* ori, size_t size, size_t alignment, VkSystemAllocationScope) -> void* {
-					return static_cast<allocator_type*>(p)->reallocate(ori, size, alignment);
-				} : nullptr,
-				.pfnFree = [](void* p, void* ptr) -> void {
-					static_cast<allocator_type*>(p)->free(ptr);
-				},
-				.pfnInternalAllocation = nullptr,
-				.pfnInternalFree = nullptr,
-			} 
-		{}
-
-		void relocate() noexcept { callbacks_.pUserData = &allocator_; }
-
-		constexpr VK_ VkAllocationCallbacks const* allocator() const { return &callbacks_; }
-
-	protected:
-		constexpr auto& allocator_impl() noexcept { return allocator_; }
-		
-
-	private:
-		allocator_type allocator_;
-		VK_ VkAllocationCallbacks callbacks_;
-	};
-
+  private:
+    allocator_type allocator_;
+    VK_ VkAllocationCallbacks callbacks_;
+  };
 }
-
